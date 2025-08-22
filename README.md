@@ -4,7 +4,7 @@
 
 هدف اصلی ویزارد پنل، فراهم کردن یک ابزار حرفه‌ای، امن و با قابلیت شخصی‌سازی بالا برای مدیران سرورهای VPN است تا بتوانند کسب‌وکار خود را بدون دغدغه و به سادگی مدیریت کنند.
 
-![alt text]([https://user-images.githubusercontent.com/10653063/201490221-7e3f7c35-1f9e-4e1b-afe7-7d721111586a.png](https://github.com/webwizards-team/wizardpanel/blob/f69a3c6d29c030b9bbb963b206b703577e32f15e/logo.jpg))
+![alt text](https://github.com/webwizards-team/wizardpanel/blob/f69a3c6d29c030b9bbb963b206b703577e32f15e/logo.jpg))
 
 ✨ ویژگی‌های کلیدی ویزارد پنل (Wizard Panel)
 
