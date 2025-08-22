@@ -3,18 +3,36 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
+define('DEFAULT_BOT_TOKEN', 'TOKEN');
+define('DEFAULT_ADMIN_CHAT_ID', 123456789);
+define('DEFAULT_DB_NAME', 'NAME');
+
+if (file_exists(__DIR__ . '/includes/config.php')) {
+    require_once __DIR__ . '/includes/config.php';
+}
+
+// --- بررسی وضعیت نصب ---
+$already_installed = false;
+if (
+    defined('BOT_TOKEN') && BOT_TOKEN !== DEFAULT_BOT_TOKEN &&
+    defined('ADMIN_CHAT_ID') && ADMIN_CHAT_ID != DEFAULT_ADMIN_CHAT_ID &&
+    defined('DB_NAME') && DB_NAME !== DEFAULT_DB_NAME
+) {
+    $already_installed = true;
+}
+
+
 // --- متغیرهای اولیه ---
 $configFile = __DIR__ . '/includes/config.php';
-$protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443 ? "https://" : "http://";
+$protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' || $_SERVER['SERVER_PORT'] == 443) ? "https://" : "http://";
 $botFileUrl = $protocol . $_SERVER['HTTP_HOST'] . preg_replace('/\/install\.php$/', '', $_SERVER['PHP_SELF']) . '/bot.php';
 
-$step = isset($_POST['step']) ? (int) $_POST['step'] : 1;
+$step = isset($_POST['step']) ? (int)$_POST['step'] : 1;
 $errors = [];
 $successMessages = [];
 
 // --- تابع برای نوشتن در فایل کانفیگ ---
-function updateConfigValue($filePath, $key, $value)
-{
+function updateConfigValue($filePath, $key, $value) {
     if (!is_writable($filePath)) {
         return false;
     }
@@ -29,9 +47,8 @@ function updateConfigValue($filePath, $key, $value)
     return file_put_contents($filePath, $newContent);
 }
 
-// --- کد SQL برای ساخت جداول پایه ---
-function getDbBaseSchemaSQL()
-{
+// --- توابع دیتابیس ---
+function getDbBaseSchemaSQL() {
     return "
     CREATE TABLE IF NOT EXISTS `users` ( `chat_id` BIGINT NOT NULL, `first_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL, `balance` INT NOT NULL DEFAULT 0, `user_state` VARCHAR(100) NOT NULL DEFAULT 'main_menu', `state_data` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'active', `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`chat_id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `admins` ( `chat_id` BIGINT NOT NULL, `first_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL, `permissions` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL, `is_super_admin` TINYINT(1) NOT NULL DEFAULT 0, PRIMARY KEY (`chat_id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -48,73 +65,29 @@ function getDbBaseSchemaSQL()
     CREATE TABLE IF NOT EXISTS `payment_requests` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `user_id` BIGINT NOT NULL, `amount` INT NOT NULL, `photo_file_id` VARCHAR(255) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'pending', `processed_by_admin_id` BIGINT NULL DEFAULT NULL, `processed_at` TIMESTAMP NULL DEFAULT NULL, `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
 }
-
-function columnExists($pdo, $tableName, $columnName)
-{
+function columnExists($pdo, $tableName, $columnName) {
     try {
         $stmt = $pdo->prepare("SHOW COLUMNS FROM `$tableName` LIKE ?");
         $stmt->execute([$columnName]);
         return $stmt->rowCount() > 0;
-    } catch (PDOException $e) {
-        return false;
-    }
+    } catch (PDOException $e) { return false; }
 }
-
-function runDbUpgrades($pdo)
-{
+function runDbUpgrades($pdo) {
     $messages = [];
-
     if (!columnExists($pdo, 'plans', 'server_id')) {
         $pdo->exec("ALTER TABLE `plans` ADD `server_id` INT NOT NULL AFTER `id`;");
-        $messages[] = "✅ ستون `server_id` برای پشتیبانی از چند سرور به جدول `plans` اضافه شد.";
+        $messages[] = "✅ ستون `server_id` به جدول `plans` اضافه شد.";
     }
     if (!columnExists($pdo, 'services', 'server_id')) {
         $pdo->exec("ALTER TABLE `services` ADD `server_id` INT NOT NULL AFTER `id`;");
         $pdo->exec("ALTER TABLE `services` DROP INDEX `marzban_username_unique`, ADD UNIQUE `marzban_username_unique` (`marzban_username`, `server_id`);");
-        $messages[] = "✅ ستون `server_id` برای پشتیبانی از چند سرور به جدول `services` اضافه شد.";
-    }
-
-    if (!columnExists($pdo, 'users', 'test_config_count')) {
-        $pdo->exec("ALTER TABLE `users` ADD `test_config_count` INT NOT NULL DEFAULT 0 AFTER `status`;");
-        $messages[] = "✅ ستون `test_config_count` با موفقیت به جدول `users` اضافه شد.";
-    }
-    if (!columnExists($pdo, 'plans', 'is_test_plan')) {
-        $pdo->exec("ALTER TABLE `plans` ADD `is_test_plan` TINYINT(1) NOT NULL DEFAULT 0 AFTER `show_conf_links`;");
-        $messages[] = "✅ ستون `is_test_plan` با موفقیت به جدول `plans` اضافه شد.";
-    }
-    if (!columnExists($pdo, 'users', 'last_seen_at')) {
-        $pdo->exec("ALTER TABLE `users` ADD `last_seen_at` TIMESTAMP NULL DEFAULT NULL AFTER `test_config_count`;");
-        $messages[] = "✅ ستون `last_seen_at` برای ردیابی فعالیت کاربران اضافه شد.";
-    }
-    if (!columnExists($pdo, 'users', 'reminder_sent')) {
-        $pdo->exec("ALTER TABLE `users` ADD `reminder_sent` TINYINT(1) NOT NULL DEFAULT 0 AFTER `last_seen_at`;");
-        $messages[] = "✅ ستون `reminder_sent` برای جلوگیری از ارسال یادآور تکراری اضافه شد.";
-    }
-    if (!columnExists($pdo, 'services', 'warning_sent')) {
-        $pdo->exec("ALTER TABLE `services` ADD `warning_sent` TINYINT(1) NOT NULL DEFAULT 0 AFTER `volume_gb`;");
-        $messages[] = "✅ ستون `warning_sent` برای جلوگیری از ارسال هشدار انقضا تکراری اضافه شد.";
-    }
-    if (!columnExists($pdo, 'plans', 'purchase_limit')) {
-        $pdo->exec("ALTER TABLE `plans` ADD `purchase_limit` INT NOT NULL DEFAULT 0 AFTER `is_test_plan`;");
-        $messages[] = "✅ ستون `purchase_limit` برای محدودیت خرید پلن‌ها اضافه شد.";
-    }
-    if (!columnExists($pdo, 'plans', 'purchase_count')) {
-        $pdo->exec("ALTER TABLE `plans` ADD `purchase_count` INT NOT NULL DEFAULT 0 AFTER `purchase_limit`;");
-        $messages[] = "✅ ستون `purchase_count` برای شمارش خرید پلن‌ها اضافه شد.";
-    }
-    if (!columnExists($pdo, 'users', 'is_verified')) {
-        $pdo->exec("ALTER TABLE `users` ADD `is_verified` TINYINT(1) NOT NULL DEFAULT 0 AFTER `reminder_sent`;");
-        $messages[] = "✅ ستون `is_verified` برای وضعیت احراز هویت کاربران اضافه شد.";
-    }
-    if (!columnExists($pdo, 'users', 'phone_number')) {
-        $pdo->exec("ALTER TABLE `users` ADD `phone_number` VARCHAR(20) NULL DEFAULT NULL AFTER `is_verified`;");
-        $messages[] = "✅ ستون `phone_number` برای ذخیره شماره تلفن کاربران اضافه شد.";
+        $messages[] = "✅ ستون `server_id` به جدول `services` اضافه شد.";
     }
 
     return $messages;
 }
 
-if ($step === 2) {
+if (!$already_installed && $step === 2) {
     $bot_token = trim($_POST['bot_token'] ?? '');
     $admin_id = trim($_POST['admin_id'] ?? '');
     $db_host = trim($_POST['db_host'] ?? 'localhost');
@@ -122,23 +95,12 @@ if ($step === 2) {
     $db_user = trim($_POST['db_user'] ?? '');
     $db_pass = trim($_POST['db_pass'] ?? '');
 
-    if (empty($bot_token)) {
-        $errors[] = 'توکن ربات الزامی است.';
-    }
-    if (empty($admin_id) || !is_numeric($admin_id)) {
-        $errors[] = 'آیدی عددی ادمین الزامی و باید عدد باشد.';
-    }
-    if (empty($db_name)) {
-        $errors[] = 'نام دیتابیس الزامی است.';
-    }
-    if (empty($db_user)) {
-        $errors[] = 'نام کاربری دیتابیس الزامی است.';
-    }
-    if (!file_exists($configFile)) {
-        $errors[] = 'فایل کانفیگ در مسیر includes/config.php یافت نشد! مطمئن شوید فایل‌ها را به درستی آپلود کرده‌اید.';
-    } elseif (!is_writable($configFile)) {
-        $errors[] = 'فایل کانفیگ قابل نوشتن نیست! لطفاً دسترسی (Permission) فایل includes/config.php را روی 666 یا 777 تنظیم کنید.';
-    }
+    if (empty($bot_token)) $errors[] = 'توکن ربات الزامی است.';
+    if (empty($admin_id) || !is_numeric($admin_id)) $errors[] = 'آیدی عددی ادمین الزامی و باید عدد باشد.';
+    if (empty($db_name)) $errors[] = 'نام دیتابیس الزامی است.';
+    if (empty($db_user)) $errors[] = 'نام کاربری دیتابیس الزامی است.';
+    if (!file_exists($configFile)) $errors[] = 'فایل کانفیگ در مسیر includes/config.php یافت نشد!';
+    elseif (!is_writable($configFile)) $errors[] = 'فایل کانفیگ قابل نوشتن نیست! لطفاً دسترسی (Permission) فایل includes/config.php را روی 666 یا 777 تنظیم کنید.';
 
     if (empty($errors)) {
         updateConfigValue($configFile, 'BOT_TOKEN', $bot_token);
@@ -147,13 +109,13 @@ if ($step === 2) {
         updateConfigValue($configFile, 'DB_NAME', $db_name);
         updateConfigValue($configFile, 'DB_USER', $db_user);
         updateConfigValue($configFile, 'DB_PASS', $db_pass);
-
+        
         try {
             $pdo = new PDO("mysql:host=$db_host", $db_user, $db_pass);
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $pdo->exec("CREATE DATABASE IF NOT EXISTS `$db_name` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
             $pdo->exec("USE `$db_name`");
-
+            
             $pdo->exec(getDbBaseSchemaSQL());
             $successMessages[] = "✅ ساختار پایه جداول با موفقیت بررسی/ایجاد شد.";
 
@@ -162,21 +124,40 @@ if ($step === 2) {
             if (empty($upgradeMessages)) {
                 $successMessages[] = "ℹ️ دیتابیس شما از قبل به‌روز بود.";
             }
+            
         } catch (PDOException $e) {
             $errors[] = "خطا در اتصال به دیتابیس یا اجرای کوئری‌ها: " . $e->getMessage();
         }
 
         if (empty($errors)) {
-            $apiUrl = "https://api.telegram.org/bot" . $bot_token . "/setWebhook?url=" . urlencode($botFileUrl);
-            $response = @file_get_contents($apiUrl);
+            
+            $apiUrl = "https://api.telegram.org/bot" . $bot_token . "/setWebhook";
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $apiUrl,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => ['url' => $botFileUrl],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 10,
+            ]);
+            $response = curl_exec($ch);
+            
+            if(curl_errno($ch)){
+                $errors[] = 'خطای cURL وبهوک: ' . curl_error($ch);
+            }
+            curl_close($ch);
+        
+            
             $response_data = json_decode($response, true);
-            if (!$response || !$response_data['ok']) {
+            if (!$response || !$response_data || !$response_data['ok']) {
                 $errors[] = 'خطا در ثبت وبهوک: ' . ($response_data['description'] ?? 'پاسخ نامعتبر از تلگرام. مطمئن شوید توکن صحیح است.');
             }
         }
-
+        
         if (empty($errors)) {
             $successMessages[] = "✅ نصب/ارتقا با موفقیت انجام شد! ربات شما اکنون فعال است.";
+            
+            $already_installed = true; 
         }
     }
 }
@@ -208,32 +189,38 @@ if ($step === 2) {
     <div class="container">
         <h1>نصب و راه‌اندازی ربات</h1>
 
-        <?php if (!empty($errors)): ?>
+        <?php if ($already_installed): ?>
+            <?php if (!empty($successMessages)): ?>
+                <div class="alert alert-success">
+                    <strong>عملیات با موفقیت انجام شد!</strong>
+                    <ul style="padding-right: 20px;">
+                        <?php foreach ($successMessages as $msg): ?>
+                            <li><?php echo $msg; ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+            <?php else: ?>
+                 <div class="alert alert-info">
+                    <strong>توجه:</strong> به نظر می‌رسد ربات قبلاً نصب و پیکربندی شده است.
+                </div>
+            <?php endif; ?>
             <div class="alert alert-danger">
-                <strong>خطا!</strong>
-                <ul style="padding-right: 20px;">
-                    <?php foreach ($errors as $error): ?>
-                        <li><?php echo htmlspecialchars($error); ?></li>
-                    <?php endforeach; ?>
-                </ul>
-            </div>
-        <?php endif; ?>
-
-        <?php if (!empty($successMessages)): ?>
-            <div class="alert alert-success">
-                <strong>عملیات با موفقیت انجام شد!</strong>
-                <ul style="padding-right: 20px;">
-                    <?php foreach ($successMessages as $msg): ?>
-                        <li><?php echo $msg;
-                        // Don't escape html for checkmarks
-                        ?></li>
-                    <?php endforeach; ?>
-                </ul>
-            </div>
-            <div class="alert alert-danger">
-                <strong>مرحله نهایی و بسیار مهم:</strong> برای امنیت کامل، لطفاً همین الان فایل <code>install.php</code> را از هاست خود **حذف** کنید.
+                <strong>اقدام امنیتی فوری و بسیار مهم:</strong>
+                <br>
+                برای جلوگیری از دسترسی غیرمجاز و بازنویسی تنظیمات، لطفاً همین الان فایل <code>install.php</code> را از هاست خود **حذف** کنید.
             </div>
         <?php else: ?>
+            <?php if (!empty($errors)): ?>
+                <div class="alert alert-danger">
+                    <strong>خطا!</strong>
+                    <ul style="padding-right: 20px;">
+                        <?php foreach ($errors as $error): ?>
+                            <li><?php echo htmlspecialchars($error); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+            <?php endif; ?>
+
             <div class="alert alert-info">
                 آدرس وبهوک شما به صورت خودکار به آدرس زیر تنظیم خواهد شد: <br><code><?php echo htmlspecialchars($botFileUrl); ?></code>
             </div>
