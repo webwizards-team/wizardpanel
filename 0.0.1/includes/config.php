@@ -21,10 +21,10 @@ define('DATA_DIR', __DIR__ . '/../data');
 // ---                   تنظیمات اتصال به پایگاه داده                  ---
 // ---------------------------------------------------------------------
 
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'wizardpanel');
-define('DB_USER', 'WizardPanel');
-define('DB_PASS', 'RncSLsmEjndiaJF5');
+define('DB_HOST', 'localhost');     
+define('DB_NAME', 'NAME');   
+define('DB_USER', 'USER');  
+define('DB_PASS', 'PASSWORD');
 
 // ---------------------------------------------------------------------
 // ---         ایجاد خودکار پوشه دیتا در صورت عدم وجود              ---
