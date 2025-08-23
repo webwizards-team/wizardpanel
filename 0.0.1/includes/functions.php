@@ -123,7 +123,16 @@ function sendPhoto($chat_id, $photo, $caption, $keyboard = null) {
 
 function editMessageText($chat_id, $message_id, $text, $keyboard = null) {
     $params = ['chat_id' => $chat_id, 'message_id' => $message_id, 'text' => $text, 'reply_markup' => handleKeyboard($keyboard), 'parse_mode' => 'HTML'];
-    return apiRequest('editMessageText', $params);
+
+    global $oneTimeEdit;
+    if ($oneTimeEdit) {
+        $oneTimeEdit = false;
+        return apiRequest('editMessageText', $params);
+    }
+    else {
+        unset($params['message_id']);
+        return apiRequest('sendMessage', $params);
+    }
 }
 
 function editMessageCaption($chat_id, $message_id, $caption, $keyboard = null) {
