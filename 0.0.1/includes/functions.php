@@ -125,7 +125,7 @@ function editMessageText($chat_id, $message_id, $text, $keyboard = null) {
     $params = ['chat_id' => $chat_id, 'message_id' => $message_id, 'text' => $text, 'reply_markup' => handleKeyboard($keyboard), 'parse_mode' => 'HTML'];
 
     global $oneTimeEdit;
-    if ($oneTimeEdit) {
+    if (USER_INLINE_KEYBOARD && $oneTimeEdit) {
         $oneTimeEdit = false;
         return apiRequest('editMessageText', $params);
     }
