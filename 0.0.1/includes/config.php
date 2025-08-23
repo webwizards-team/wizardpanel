@@ -8,6 +8,8 @@ define('BOT_TOKEN', 'TOKEN');
 
 define('ADMIN_CHAT_ID', 123456789);
 
+define('SECRET_TOKEN', 'SECRET');
+
 // ---------------------------------------------------------------------
 // ---                         مسیرهای پروژه                           ---
 // ---------------------------------------------------------------------
@@ -19,10 +21,10 @@ define('DATA_DIR', __DIR__ . '/../data');
 // ---                   تنظیمات اتصال به پایگاه داده                  ---
 // ---------------------------------------------------------------------
 
-define('DB_HOST', 'localhost');     
-define('DB_NAME', 'NAME');   
-define('DB_USER', 'USER');  
-define('DB_PASS', 'PASSWORD');
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'wizardpanel');
+define('DB_USER', 'WizardPanel');
+define('DB_PASS', 'RncSLsmEjndiaJF5');
 
 // ---------------------------------------------------------------------
 // ---         ایجاد خودکار پوشه دیتا در صورت عدم وجود              ---
@@ -33,4 +35,3 @@ if (!is_dir(DATA_DIR)) {
         die('Failed to create data directory. Please check server permissions.');
     }
 }
-?>
