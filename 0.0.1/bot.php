@@ -1,7 +1,19 @@
 <?php
 
+if (function_exists('fastcgi_finish_request')) {
+    fastcgi_finish_request();
+}
+elseif (function_exists('litespeed_finish_request')) {
+    litespeed_finish_request();
+}
+
 // --- فراخوانی فایل‌های مورد نیاز ---
 require_once __DIR__ . '/includes/config.php';
+
+if ($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] !== SECRET_TOKEN) {
+    die;
+}
+
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/functions.php';
 require_once __DIR__ . '/includes/marzban_api.php';
@@ -10,10 +22,12 @@ require_once __DIR__ . '/includes/marzban_api.php';
 // ---                     شروع منطق اصلی ربات                         ---
 // ---------------------------------------------------------------------
 
+$apiRequest = false;
+$oneTimeEdit = true;
 $update = json_decode(file_get_contents('php://input'), true);
 
 if (!$update) {
-    exit();
+    die;
 }
 
 // --- آماده‌سازی متغیرهای اولیه ---
@@ -26,7 +40,8 @@ $first_name = 'کاربر';
 if (isset($update['callback_query'])) {
     $chat_id = $update['callback_query']['message']['chat']['id'];
     $first_name = $update['callback_query']['from']['first_name'];
-} elseif (isset($update['message']['chat']['id'])) {
+}
+elseif (isset($update['message']['chat']['id'])) {
     $chat_id = $update['message']['chat']['id'];
     $first_name = $update['message']['from']['first_name'];
 }
@@ -37,14 +52,16 @@ if ($chat_id) {
     $user_state = $user_data['state'] ?? 'none';
     $settings = getSettings();
 
+    define('USER_INLINE_KEYBOARD', $settings['inline_keyboard'] === 'on');
+
     // --- بررسی‌های اولیه (وضعیت ربات، مسدود بودن، عضویت در کانال) ---
     if ($settings['bot_status'] === 'off' && !$isAnAdmin) {
         sendMessage($chat_id, "🛠 ربات در حال حاضر در دست تعمیر است. لطفا بعدا مراجعه کنید.");
-        exit();
+        die;
     }
     if (($user_data['status'] ?? 'active') === 'banned') {
         sendMessage($chat_id, "🚫 شما توسط ادمین از ربات مسدود شده‌اید.");
-        exit();
+        die;
     }
 
     if (!$isAnAdmin && !checkJoinStatus($chat_id)) {
@@ -53,7 +70,7 @@ if ($chat_id) {
 
         $keyboard = ['inline_keyboard' => [[['text' => ' عضویت در کانال 📢', 'url' => "https://t.me/{$channel_id}"]], [['text' => '✅ عضو شدم', 'callback_data' => 'check_join']]]];
         sendMessage($chat_id, $message, $keyboard);
-        exit();
+        die;
     }
 }
 
@@ -74,14 +91,15 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             handleMainMenu($chat_id, $first_name, true);
-        } else {
+        }
+        else {
             apiRequest('answerCallbackQuery', [
                 'callback_query_id' => $callback_id,
                 'text' => '❌ شما هنوز در کانال عضو نشده‌اید!',
                 'show_alert' => true,
             ]);
         }
-        exit();
+        die;
     }
 
     if ($data === 'verify_by_button') {
@@ -91,7 +109,7 @@ if (isset($update['callback_query'])) {
         apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
         editMessageText($chat_id, $message_id, "✅ هویت شما با موفقیت تایید شد. خوش آمدید!");
         handleMainMenu($chat_id, $first_name);
-        exit();
+        die;
     }
 
     $is_verified = $user_data['is_verified'] ?? 0;
@@ -103,7 +121,7 @@ if (isset($update['callback_query'])) {
             'text' => 'برای استفاده از دکمه‌ها، ابتدا باید هویت خود را تایید کنید.',
             'show_alert' => true,
         ]);
-        exit();
+        die;
     }
 
     // --- دکمه‌های مخصوص ادمین‌ها ---
@@ -116,7 +134,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ حذف شد']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generateCategoryList($chat_id);
-        } elseif (strpos($data, 'toggle_cat_') === 0 && hasPermission($chat_id, 'manage_categories')) {
+        }
+        elseif (strpos($data, 'toggle_cat_') === 0 && hasPermission($chat_id, 'manage_categories')) {
             $cat_id = str_replace('toggle_cat_', '', $data);
             pdo()
                 ->prepare("UPDATE categories SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
@@ -124,14 +143,16 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generateCategoryList($chat_id);
-        } elseif (strpos($data, 'delete_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'delete_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $plan_id = str_replace('delete_plan_', '', $data);
             pdo()
                 ->prepare("DELETE FROM plans WHERE id = ?")
                 ->execute([$plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ پلن حذف شد']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
-        } elseif (strpos($data, 'toggle_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'toggle_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $plan_id = str_replace('toggle_plan_', '', $data);
             pdo()
                 ->prepare("UPDATE plans SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
@@ -139,7 +160,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generatePlanList($chat_id);
-        } elseif (strpos($data, 'edit_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'edit_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $plan_id = str_replace('edit_plan_', '', $data);
             $plan = getPlanById($plan_id);
             if ($plan) {
@@ -155,10 +177,12 @@ if (isset($update['callback_query'])) {
                 $message_text = $update['callback_query']['message']['text'] . "\n\nکدام بخش را می‌خواهید ویرایش کنید؟";
                 editMessageText($chat_id, $message_id, $message_text, $keyboard);
             }
-        } elseif (strpos($data, 'back_to_plan_view_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'back_to_plan_view_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generatePlanList($chat_id);
-        } elseif (strpos($data, 'edit_plan_field_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'edit_plan_field_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             preg_match('/edit_plan_field_(\d+)_(\w+)/', $data, $matches);
             $plan_id = $matches[1];
             $field = $matches[2];
@@ -216,7 +240,8 @@ if (isset($update['callback_query'])) {
             if ($field !== 'category' && $field !== 'server') {
                 apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             }
-        } elseif (strpos($data, 'set_plan_category_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'set_plan_category_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             preg_match('/set_plan_category_(\d+)_(\d+)/', $data, $matches);
             $plan_id = $matches[1];
             $category_id = $matches[2];
@@ -226,7 +251,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ دسته‌بندی پلن با موفقیت تغییر کرد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generatePlanList($chat_id);
-        } elseif (strpos($data, 'set_plan_server_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'set_plan_server_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             preg_match('/set_plan_server_(\d+)_(\d+)/', $data, $matches);
             $plan_id = $matches[1];
             $server_id = $matches[2];
@@ -236,7 +262,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ سرور پلن با موفقیت تغییر کرد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generatePlanList($chat_id);
-        } elseif (strpos($data, 'p_cat_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'p_cat_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $category_id = str_replace('p_cat_', '', $data);
             $servers = pdo()
                 ->query("SELECT id, name FROM servers WHERE status = 'active'")
@@ -244,14 +271,15 @@ if (isset($update['callback_query'])) {
             if (empty($servers)) {
                 editMessageText($chat_id, $message_id, "❌ ابتدا باید حداقل یک سرور در بخش «مدیریت مرزبان» اضافه کنید.");
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-                exit();
+                die;
             }
             $keyboard_buttons = [];
             foreach ($servers as $server) {
                 $keyboard_buttons[] = [['text' => $server['name'], 'callback_data' => "p_server_{$server['id']}_cat_{$category_id}"]];
             }
             editMessageText($chat_id, $message_id, "این پلن روی کدام سرور ساخته شود؟", ['inline_keyboard' => $keyboard_buttons]);
-        } elseif (strpos($data, 'p_server_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'p_server_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             preg_match('/p_server_(\d+)_cat_(\d+)/', $data, $matches);
             $server_id = $matches[1];
             $category_id = $matches[2];
@@ -263,7 +291,8 @@ if (isset($update['callback_query'])) {
             updateUserData($chat_id, 'awaiting_plan_name', $state_data);
             sendMessage($chat_id, "1/6 - لطفا نام پلن را وارد کنید:", $cancelKeyboard);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
-        } elseif (strpos($data, 'copy_toggle_') === 0 && hasPermission($chat_id, 'manage_payment')) {
+        }
+        elseif (strpos($data, 'copy_toggle_') === 0 && hasPermission($chat_id, 'manage_payment')) {
             $toggle = str_replace('copy_toggle_', '', $data) === 'yes';
             $settings = getSettings();
             $settings['payment_method'] = ['card_number' => $user_data['state_data']['temp_card_number'], 'card_holder' => $user_data['state_data']['temp_card_holder'], 'copy_enabled' => $toggle];
@@ -272,7 +301,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ تنظیمات ذخیره شد']);
             editMessageText($chat_id, $message_id, "✅ تنظیمات روش پرداخت با موفقیت ذخیره شد.");
             handleMainMenu($chat_id, $first_name);
-        } elseif (strpos($data, 'approve_') === 0 || strpos($data, 'reject_') === 0) {
+        }
+        elseif (strpos($data, 'approve_') === 0 || strpos($data, 'reject_') === 0) {
             list($action, $request_id) = explode('_', $data);
 
             $stmt = pdo()->prepare("SELECT * FROM payment_requests WHERE id = ?");
@@ -281,7 +311,7 @@ if (isset($update['callback_query'])) {
 
             if (!$request) {
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'خطا: درخواست یافت نشد.']);
-                exit();
+                die;
             }
 
             if ($request['status'] !== 'pending') {
@@ -294,7 +324,7 @@ if (isset($update['callback_query'])) {
                     'text' => "این درخواست قبلاً توسط {$processed_admin_name} {$status_fa} شده است.",
                     'show_alert' => true,
                 ]);
-                exit();
+                die;
             }
 
             $user_id_to_charge = $request['user_id'];
@@ -311,7 +341,8 @@ if (isset($update['callback_query'])) {
 
                 editMessageCaption($chat_id, $message_id, $update['callback_query']['message']['caption'] . "\n\n<b>✅ توسط شما تایید شد.</b>", null);
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ شارژ تایید شد']);
-            } elseif ($action == 'reject') {
+            }
+            elseif ($action == 'reject') {
                 $stmt = pdo()->prepare("UPDATE payment_requests SET status = 'rejected', processed_by_admin_id = ?, processed_at = NOW() WHERE id = ?");
                 $stmt->execute([$admin_who_processed, $request_id]);
 
@@ -320,7 +351,8 @@ if (isset($update['callback_query'])) {
                 editMessageCaption($chat_id, $message_id, $update['callback_query']['message']['caption'] . "\n\n<b>❌ توسط شما رد شد.</b>", null);
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ درخواست رد شد']);
             }
-        } elseif ($data === 'manage_marzban_servers' && hasPermission($chat_id, 'manage_marzban')) {
+        }
+        elseif ($data === 'manage_marzban_servers' && hasPermission($chat_id, 'manage_marzban')) {
             $servers = pdo()
                 ->query("SELECT id, name FROM servers")
                 ->fetchAll(PDO::FETCH_ASSOC);
@@ -331,11 +363,13 @@ if (isset($update['callback_query'])) {
             $keyboard_buttons[] = [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']];
 
             editMessageText($chat_id, $message_id, "<b>🌐 مدیریت سرورهای مرزبان</b>\n\nسرور مورد نظر را برای مشاهده یا حذف انتخاب کنید، یا یک سرور جدید اضافه کنید:", ['inline_keyboard' => $keyboard_buttons]);
-        } elseif ($data === 'add_marzban_server' && hasPermission($chat_id, 'manage_marzban')) {
+        }
+        elseif ($data === 'add_marzban_server' && hasPermission($chat_id, 'manage_marzban')) {
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             updateUserData($chat_id, 'admin_awaiting_server_name');
             sendMessage($chat_id, "مرحله ۱/۴: یک نام دلخواه برای شناسایی سرور وارد کنید (مثال: آلمان-هتزنر):", $cancelKeyboard);
-        } elseif (strpos($data, 'view_server_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
+        }
+        elseif (strpos($data, 'view_server_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
             $server_id = str_replace('view_server_', '', $data);
             $stmt = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
             $stmt->execute([$server_id]);
@@ -347,26 +381,30 @@ if (isset($update['callback_query'])) {
                 $keyboard = ['inline_keyboard' => [[['text' => '🗑 حذف این سرور', 'callback_data' => "delete_server_{$server_id}"]], [['text' => '◀️ بازگشت به لیست سرورها', 'callback_data' => 'manage_marzban_servers']]]];
                 editMessageText($chat_id, $message_id, $msg, $keyboard);
             }
-        } elseif (strpos($data, 'delete_server_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
+        }
+        elseif (strpos($data, 'delete_server_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
             $server_id = str_replace('delete_server_', '', $data);
             $stmt_check = pdo()->prepare("SELECT COUNT(*) FROM plans WHERE server_id = ?");
             $stmt_check->execute([$server_id]);
             if ($stmt_check->fetchColumn() > 0) {
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ نمی‌توانید این سرور را حذف کنید زیرا یک یا چند پلن به آن متصل هستند.', 'show_alert' => true]);
-            } else {
+            }
+            else {
                 $stmt = pdo()->prepare("DELETE FROM servers WHERE id = ?");
                 $stmt->execute([$server_id]);
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ سرور با موفقیت حذف شد.']);
                 $data = 'manage_marzban_servers';
             }
-        } elseif (strpos($data, 'plan_set_sub_') === 0) {
+        }
+        elseif (strpos($data, 'plan_set_sub_') === 0) {
             $show_sub = str_replace('plan_set_sub_', '', $data) === 'yes';
             $state_data = $user_data['state_data'];
             $state_data['temp_plan_data']['show_sub_link'] = $show_sub;
             updateUserData($chat_id, 'awaiting_plan_conf_link_setting', $state_data);
             $keyboard = ['inline_keyboard' => [[['text' => '✅ بله', 'callback_data' => 'plan_set_conf_yes'], ['text' => '❌ خیر', 'callback_data' => 'plan_set_conf_no']]]];
             editMessageText($chat_id, $message_id, "سوال ۲/۲: آیا لینک‌های تکی کانفیگ‌ها به کاربر نمایش داده شود؟\n(پیشنهادی: خیر)", $keyboard);
-        } elseif (strpos($data, 'plan_set_conf_') === 0) {
+        }
+        elseif (strpos($data, 'plan_set_conf_') === 0) {
             $show_conf = str_replace('plan_set_conf_', '', $data) === 'yes';
             $final_plan_data = $user_data['state_data']['temp_plan_data'] ?? null;
             if ($final_plan_data) {
@@ -389,12 +427,14 @@ if (isset($update['callback_query'])) {
                 editMessageText($chat_id, $message_id, "✅ پلن جدید با تمام تنظیمات با موفقیت ذخیره شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 handleMainMenu($chat_id, $first_name);
-            } else {
+            }
+            else {
                 editMessageText($chat_id, $message_id, "❌ خطا در ذخیره‌سازی پلن. لطفا مجددا تلاش کنید.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 handleMainMenu($chat_id, $first_name);
             }
-        } elseif (strpos($data, 'discount_type_') === 0) {
+        }
+        elseif (strpos($data, 'discount_type_') === 0) {
             $type = str_replace('discount_type_', '', $data);
             $state_data = $user_data['state_data'];
             $state_data['new_discount_type'] = $type;
@@ -402,14 +442,16 @@ if (isset($update['callback_query'])) {
             $unit = $type == 'percent' ? 'درصد' : 'تومان';
             editMessageText($chat_id, $message_id, "3/4 - لطفاً مقدار تخفیف را به $unit وارد کنید (فقط عدد):");
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-        } elseif (strpos($data, 'delete_discount_') === 0) {
+        }
+        elseif (strpos($data, 'delete_discount_') === 0) {
             $code_id = str_replace('delete_discount_', '', $data);
             pdo()
                 ->prepare("DELETE FROM discount_codes WHERE id = ?")
                 ->execute([$code_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ کد تخفیف حذف شد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
-        } elseif (strpos($data, 'toggle_discount_') === 0) {
+        }
+        elseif (strpos($data, 'toggle_discount_') === 0) {
             $code_id = str_replace('toggle_discount_', '', $data);
             pdo()
                 ->prepare("UPDATE discount_codes SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
@@ -417,7 +459,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت کد تخفیف تغییر کرد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generateDiscountCodeList($chat_id);
-        } elseif (strpos($data, 'delete_guide_') === 0 && hasPermission($chat_id, 'manage_guides')) {
+        }
+        elseif (strpos($data, 'delete_guide_') === 0 && hasPermission($chat_id, 'manage_guides')) {
             $guide_id = str_replace('delete_guide_', '', $data);
             pdo()
                 ->prepare("DELETE FROM guides WHERE id = ?")
@@ -425,7 +468,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ راهنما حذف شد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generateGuideList($chat_id);
-        } elseif (strpos($data, 'toggle_guide_') === 0 && hasPermission($chat_id, 'manage_guides')) {
+        }
+        elseif (strpos($data, 'toggle_guide_') === 0 && hasPermission($chat_id, 'manage_guides')) {
             $guide_id = str_replace('toggle_guide_', '', $data);
             pdo()
                 ->prepare("UPDATE guides SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
@@ -433,7 +477,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت راهنما تغییر کرد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generateGuideList($chat_id);
-        } elseif (strpos($data, 'reset_plan_count_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'reset_plan_count_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $plan_id = str_replace('reset_plan_count_', '', $data);
             pdo()
                 ->prepare("UPDATE plans SET purchase_count = 0 WHERE id = ?")
@@ -452,7 +497,8 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ این پلن به عنوان پلن تست تنظیم شد.']);
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             generatePlanList($chat_id);
-        } elseif (strpos($data, 'make_plan_normal_') === 0 && hasPermission($chat_id, 'manage_plans')) {
+        }
+        elseif (strpos($data, 'make_plan_normal_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $plan_id = str_replace('make_plan_normal_', '', $data);
             pdo()
                 ->prepare("UPDATE plans SET is_test_plan = 0 WHERE id = ?")
@@ -464,7 +510,8 @@ if (isset($update['callback_query'])) {
 
         if (strpos($data, 'admin_notifications_soon') === 0) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'این بخش به زودی فعال خواهد شد.', 'show_alert' => true]);
-        } elseif (($data == 'user_notifications_menu' || $data == 'config_expire_warning' || $data == 'config_inactive_reminder') && hasPermission($chat_id, 'manage_notifications')) {
+        }
+        elseif (($data == 'user_notifications_menu' || $data == 'config_expire_warning' || $data == 'config_inactive_reminder') && hasPermission($chat_id, 'manage_notifications')) {
             $settings = getSettings();
             $expire_status_icon = ($settings['notification_expire_status'] ?? 'off') == 'on' ? '✅' : '❌';
             $inactive_status_icon = ($settings['notification_inactive_status'] ?? 'off') == 'on' ? '✅' : '❌';
@@ -487,7 +534,8 @@ if (isset($update['callback_query'])) {
                     ],
                 ];
                 editMessageText($chat_id, $message_id, $message, $keyboard);
-            } elseif ($data == 'config_expire_warning') {
+            }
+            elseif ($data == 'config_expire_warning') {
                 $message =
                     "<b>⚙️ تنظیمات هشدار انقضا</b>\n\nاین پیام زمانی برای کاربر ارسال می‌شود که حجم یا زمان سرویس او رو به اتمام باشد.\n\n" .
                     "▫️وضعیت: <b>" .
@@ -504,7 +552,8 @@ if (isset($update['callback_query'])) {
                     ],
                 ];
                 editMessageText($chat_id, $message_id, $message, $keyboard);
-            } elseif ($data == 'config_inactive_reminder') {
+            }
+            elseif ($data == 'config_inactive_reminder') {
                 $message =
                     "<b>⚙️ تنظیمات یادآور عدم فعالیت</b>\n\nاین پیام زمانی برای کاربر ارسال می‌شود که برای مدت طولانی از ربات استفاده نکرده باشد.\n\n" .
                     "▫️وضعیت: <b>" .
@@ -521,19 +570,22 @@ if (isset($update['callback_query'])) {
                 ];
                 editMessageText($chat_id, $message_id, $message, $keyboard);
             }
-        } elseif (strpos($data, 'toggle_expire_notification') === 0 && hasPermission($chat_id, 'manage_notifications')) {
+        }
+        elseif (strpos($data, 'toggle_expire_notification') === 0 && hasPermission($chat_id, 'manage_notifications')) {
             $settings = getSettings();
             $settings['notification_expire_status'] = ($settings['notification_expire_status'] ?? 'off') == 'on' ? 'off' : 'on';
             saveSettings($settings);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
             $data = 'config_expire_warning';
-        } elseif (strpos($data, 'toggle_inactive_notification') === 0 && hasPermission($chat_id, 'manage_notifications')) {
+        }
+        elseif (strpos($data, 'toggle_inactive_notification') === 0 && hasPermission($chat_id, 'manage_notifications')) {
             $settings = getSettings();
             $settings['notification_inactive_status'] = ($settings['notification_inactive_status'] ?? 'off') == 'on' ? 'off' : 'on';
             saveSettings($settings);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
             $data = 'config_inactive_reminder';
-        } elseif (in_array($data, ['set_expire_days', 'set_expire_gb', 'edit_expire_message', 'set_inactive_days', 'edit_inactive_message']) && hasPermission($chat_id, 'manage_notifications')) {
+        }
+        elseif (in_array($data, ['set_expire_days', 'set_expire_gb', 'edit_expire_message', 'set_inactive_days', 'edit_inactive_message']) && hasPermission($chat_id, 'manage_notifications')) {
             apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
             switch ($data) {
                 case 'set_expire_days':
@@ -572,7 +624,8 @@ if (isset($update['callback_query'])) {
                 }
                 $keyboard_buttons[] = [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']];
                 editMessageText($chat_id, $message_id, "<b>🌐 مدیریت سرورهای مرزبان</b>\n\nسرور مورد نظر را برای مشاهده یا حذف انتخاب کنید، یا یک سرور جدید اضافه کنید:", ['inline_keyboard' => $keyboard_buttons]);
-            } else {
+            }
+            else {
                 $menu_to_refresh = strpos($data, 'inactive') !== false || strpos($user_state, 'inactive') !== false ? 'config_inactive_reminder' : 'config_expire_warning';
                 $message_id = sendMessage($chat_id, "درحال بارگذاری مجدد منو...")['result']['message_id'];
                 $data = $menu_to_refresh;
@@ -586,7 +639,7 @@ if (isset($update['callback_query'])) {
             saveSettings($settings);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ روش احراز هویت تغییر کرد.']);
             showVerificationManagementMenu($chat_id);
-            exit();
+            die;
         }
         if ($data == 'toggle_verification_iran_only' && hasPermission($chat_id, 'manage_verification')) {
             $settings = getSettings();
@@ -594,7 +647,7 @@ if (isset($update['callback_query'])) {
             saveSettings($settings);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ تنظیمات ذخیره شد.']);
             showVerificationManagementMenu($chat_id);
-            exit();
+            die;
         }
 
         if ($chat_id == ADMIN_CHAT_ID) {
@@ -602,16 +655,19 @@ if (isset($update['callback_query'])) {
                 $admins = getAdmins();
                 if (count($admins) >= 9) {
                     apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ حداکثر تعداد ادمین‌ها (۱۰) ثبت شده است.', 'show_alert' => true]);
-                } else {
+                }
+                else {
                     updateUserData($chat_id, 'admin_awaiting_new_admin_id');
                     editMessageText($chat_id, $message_id, "لطفا شناسه عددی (Chat ID) کاربر مورد نظر را برای افزودن به لیست ادمین‌ها وارد کنید:");
                     apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
                 }
-            } elseif (strpos($data, 'edit_admin_permissions_') === 0) {
+            }
+            elseif (strpos($data, 'edit_admin_permissions_') === 0) {
                 $target_admin_id = str_replace('edit_admin_permissions_', '', $data);
                 showPermissionEditor($chat_id, $message_id, $target_admin_id);
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-            } elseif (strpos($data, 'toggle_perm_') === 0) {
+            }
+            elseif (strpos($data, 'toggle_perm_') === 0) {
                 $payload = substr($data, strlen('toggle_perm_'));
                 $parts = explode('_', $payload, 2);
                 if (count($parts) === 2) {
@@ -622,7 +678,8 @@ if (isset($update['callback_query'])) {
                         $current_permissions = $admins[$target_admin_id]['permissions'] ?? [];
                         if (($key = array_search($permission_key, $current_permissions)) !== false) {
                             unset($current_permissions[$key]);
-                        } else {
+                        }
+                        else {
                             $current_permissions[] = $permission_key;
                         }
                         updateAdminPermissions($target_admin_id, array_values($current_permissions));
@@ -630,12 +687,14 @@ if (isset($update['callback_query'])) {
                     }
                 }
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-            } elseif (strpos($data, 'delete_admin_confirm_') === 0) {
+            }
+            elseif (strpos($data, 'delete_admin_confirm_') === 0) {
                 $target_admin_id = str_replace('delete_admin_confirm_', '', $data);
                 $keyboard = ['inline_keyboard' => [[['text' => '✅ بله، حذف کن', 'callback_data' => "delete_admin_do_{$target_admin_id}"]], [['text' => '❌ انصراف', 'callback_data' => "edit_admin_permissions_{$target_admin_id}"]]]];
                 editMessageText($chat_id, $message_id, "⚠️ آیا از حذف این ادمین مطمئن هستید؟", $keyboard);
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-            } elseif (strpos($data, 'delete_admin_do_') === 0) {
+            }
+            elseif (strpos($data, 'delete_admin_do_') === 0) {
                 $target_admin_id = str_replace('delete_admin_do_', '', $data);
                 $result = removeAdmin($target_admin_id);
                 if ($result) {
@@ -652,10 +711,12 @@ if (isset($update['callback_query'])) {
                     }
                     $keyboard_buttons[] = [['text' => '◀️ بازگشت به پنل مدیریت', 'callback_data' => 'back_to_admin_panel']];
                     editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
-                } else {
+                }
+                else {
                     apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ خطا در حذف ادمین.', 'show_alert' => true]);
                 }
-            } elseif ($data == 'back_to_admin_list') {
+            }
+            elseif ($data == 'back_to_admin_list') {
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
                 $admins = getAdmins();
                 $message = "<b>👨‍💼 مدیریت ادمین‌ها</b>\n\nدر این بخش می‌توانید ادمین‌های ربات و دسترسی‌های آن‌ها را مدیریت کنید. (حداکثر ۱۰ ادمین)";
@@ -669,7 +730,8 @@ if (isset($update['callback_query'])) {
                 }
                 $keyboard_buttons[] = [['text' => '◀️ بازگشت به پنل مدیریت', 'callback_data' => 'back_to_admin_panel']];
                 editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
-            } elseif ($data == 'back_to_admin_panel') {
+            }
+            elseif ($data == 'back_to_admin_panel') {
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
                 apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
                 handleMainMenu($chat_id, $first_name);
@@ -681,7 +743,7 @@ if (isset($update['callback_query'])) {
     if (strpos($data, 'reply_ticket_') === 0) {
         if ($isAnAdmin && !hasPermission($chat_id, 'view_tickets')) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'شما دسترسی لازم برای پاسخ به تیکت‌ها را ندارید.', 'show_alert' => true]);
-            exit();
+            die;
         }
         $ticket_id = str_replace('reply_ticket_', '', $data);
         $stmt = pdo()->prepare("SELECT status FROM tickets WHERE id = ?");
@@ -689,19 +751,22 @@ if (isset($update['callback_query'])) {
         $ticket_status = $stmt->fetchColumn();
         if (!$ticket_status || $ticket_status == 'closed') {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'این تیکت بسته شده است.', 'show_alert' => true]);
-        } else {
+        }
+        else {
             if ($isAnAdmin) {
                 updateUserData($chat_id, 'admin_replying_to_ticket', ['replying_to_ticket' => $ticket_id]);
                 sendMessage($chat_id, "لطفا پاسخ خود را برای تیکت <code>$ticket_id</code> وارد کنید:", $cancelKeyboard);
-            } else {
+            }
+            else {
                 updateUserData($chat_id, 'user_replying_to_ticket', ['replying_to_ticket' => $ticket_id]);
                 sendMessage($chat_id, "لطفا پاسخ خود را برای تیکت <code>$ticket_id</code> وارد کنید:", $cancelKeyboard);
             }
         }
-    } elseif (strpos($data, 'close_ticket_') === 0) {
+    }
+    elseif (strpos($data, 'close_ticket_') === 0) {
         if ($isAnAdmin && !hasPermission($chat_id, 'view_tickets')) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'شما دسترسی لازم برای بستن تیکت‌ها را ندارید.', 'show_alert' => true]);
-            exit();
+            die;
         }
         $ticket_id = str_replace('close_ticket_', '', $data);
         $stmt = pdo()->prepare("SELECT user_id, user_name FROM tickets WHERE id = ?");
@@ -721,7 +786,8 @@ if (isset($update['callback_query'])) {
             }
             editMessageText($chat_id, $message_id, $update['callback_query']['message']['text'] . "\n\n<b>-- ➖ این تیکت بسته شد ➖ --</b>", null);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'تیکت با موفقیت بسته شد.']);
-        } else {
+        }
+        else {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'خطا: تیکت یافت نشد.', 'show_alert' => true]);
         }
     }
@@ -740,22 +806,27 @@ if (isset($update['callback_query'])) {
             }
             if ($guide['content_type'] === 'photo' && !empty($guide['photo_id'])) {
                 sendPhoto($chat_id, $guide['photo_id'], $guide['message_text'], $keyboard);
-            } else {
+            }
+            else {
                 sendMessage($chat_id, $guide['message_text'], $keyboard);
             }
-        } else {
+        }
+        else {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ این راهنما یافت نشد یا غیرفعال شده است.', 'show_alert' => true]);
         }
-    } elseif (strpos($data, 'cat_') === 0) {
+    }
+    elseif (strpos($data, 'cat_') === 0) {
         $categoryId = str_replace('cat_', '', $data);
         showPlansForCategory($chat_id, $categoryId);
         apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
-    } elseif (strpos($data, 'apply_discount_code_') === 0) {
+    }
+    elseif (strpos($data, 'apply_discount_code_') === 0) {
         $category_id = str_replace('apply_discount_code_', '', $data);
         updateUserData($chat_id, 'user_awaiting_discount_code', ['target_category_id' => $category_id]);
         editMessageText($chat_id, $message_id, "🎁 لطفاً کد تخفیف خود را وارد کنید:");
         apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-    } elseif (strpos($data, 'buy_plan_') === 0) {
+    }
+    elseif (strpos($data, 'buy_plan_') === 0) {
         $parts = explode('_', $data);
         $plan_id = $parts[2];
         $discount_code = null;
@@ -765,7 +836,7 @@ if (isset($update['callback_query'])) {
         $plan = getPlanById($plan_id);
         if (!$plan) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ خطا: پلن یافت نشد.']);
-            exit();
+            die;
         }
 
         if ($plan['purchase_limit'] > 0 && $plan['purchase_count'] >= $plan['purchase_limit']) {
@@ -774,10 +845,10 @@ if (isset($update['callback_query'])) {
                 'text' => '❌ متاسفانه ظرفیت خرید این پلن به اتمام رسیده است.',
                 'show_alert' => true,
             ]);
-            exit();
+            die;
         }
 
-        $final_price = (float) $plan['price'];
+        $final_price = (float)$plan['price'];
         $discount_applied = false;
         $discount_object = null;
         if ($discount_code) {
@@ -787,15 +858,17 @@ if (isset($update['callback_query'])) {
             if ($discount) {
                 if ($discount['type'] == 'percent') {
                     $final_price = $plan['price'] - ($plan['price'] * $discount['value']) / 100;
-                } else {
+                }
+                else {
                     $final_price = $plan['price'] - $discount['value'];
                 }
                 $final_price = max(0, $final_price);
                 $discount_applied = true;
                 $discount_object = $discount;
-            } else {
+            }
+            else {
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ کد تخفیف نامعتبر یا منقضی شده است.', 'show_alert' => true]);
-                exit();
+                die;
             }
         }
         $current_user_data = getUserData($from_id, $first_name);
@@ -807,7 +880,8 @@ if (isset($update['callback_query'])) {
                     pdo()
                         ->prepare("UPDATE users SET test_config_count = test_config_count + 1 WHERE chat_id = ?")
                         ->execute([$from_id]);
-                } else {
+                }
+                else {
                     updateUserBalance($from_id, $final_price, 'deduct');
                 }
 
@@ -855,18 +929,22 @@ if (isset($update['callback_query'])) {
                     $admin_notification .= "💵 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
                     $admin_notification .= "🏷 کد تخفیف: <code>{$discount_code}</code>\n";
                     $admin_notification .= "💳 مبلغ پرداخت شده: <b>" . number_format($final_price) . " تومان</b>";
-                } else {
+                }
+                else {
                     $admin_notification .= "💳 مبلغ پرداخت شده: " . number_format($final_price) . " تومان";
                 }
                 sendMessage(ADMIN_CHAT_ID, $admin_notification);
-            } else {
+            }
+            else {
                 editMessageText($chat_id, $message_id, "❌ متاسفانه در ایجاد سرویس شما مشکلی پیش آمد. لطفا با پشتیبانی تماس بگیرید. مبلغی از حساب شما کسر نشده است.");
                 sendMessage(ADMIN_CHAT_ID, "⚠️ <b>خطای ساخت سرویس</b>\n\nکاربر با شناسه <code>$from_id</code> قصد خرید پلن '{$plan['name']}' را داشت اما ارتباط با پنل مرزبان ناموفق بود. لطفا لاگ‌ها و تنظیمات سرور مربوطه را بررسی کنید.");
             }
-        } else {
+        }
+        else {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ موجودی حساب شما کافی نیست!', 'show_alert' => true]);
         }
-    } elseif ($data == 'back_to_categories') {
+    }
+    elseif ($data == 'back_to_categories') {
         apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
         $categories = getCategories(true);
         $keyboard_buttons = [];
@@ -874,11 +952,13 @@ if (isset($update['callback_query'])) {
             $keyboard_buttons[] = [['text' => '🛍 ' . $category['name'], 'callback_data' => 'cat_' . $category['id']]];
         }
         sendMessage($chat_id, "لطفا یکی از دسته‌بندی‌های زیر را انتخاب کنید:", ['inline_keyboard' => $keyboard_buttons]);
-    } elseif (strpos($data, 'service_details_') === 0) {
+    }
+    elseif (strpos($data, 'service_details_') === 0) {
         $username = str_replace('service_details_', '', $data);
         if (isset($update['callback_query']['message']['photo'])) {
             editMessageCaption($chat_id, $message_id, "⏳ در حال دریافت اطلاعات سرویس، لطفا صبر کنید...");
-        } else {
+        }
+        else {
             editMessageText($chat_id, $message_id, "⏳ در حال دریافت اطلاعات سرویس، لطفا صبر کنید...");
         }
 
@@ -912,7 +992,8 @@ if (isset($update['callback_query'])) {
                     "➖➖➖➖➖➖➖➖➖➖\n";
                 if ($local_service['show_sub_link']) {
                     $caption .= "\n🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($marzban_user['subscription_url']) . "</code>\n";
-                } else {
+                }
+                else {
                     $caption .= "\n🔗 لینک اشتراک برای این پلن نمایش داده نمی‌شود.\n";
                 }
                 if ($local_service['show_conf_links'] && !empty($marzban_user['links'])) {
@@ -930,19 +1011,24 @@ if (isset($update['callback_query'])) {
                 ];
                 apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
                 sendPhoto($chat_id, $qr_code_url, trim($caption), $keyboard);
-            } else {
+            }
+            else {
                 editMessageText($chat_id, $message_id, "❌ خطایی در دریافت اطلاعات سرویس از سرور رخ داد یا سرویس یافت نشد. ممکن است توسط ادمین حذف شده باشد.");
             }
-        } else {
+        }
+        else {
             editMessageText($chat_id, $message_id, "❌ سرویس در دیتابیس ربات یافت نشد.");
         }
-    } elseif (strpos($data, 'renew_service_') === 0) {
+    }
+    elseif (strpos($data, 'renew_service_') === 0) {
         apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'این قابلیت به زودی فعال خواهد شد.', 'show_alert' => true]);
-    } elseif (strpos($data, 'delete_service_confirm_') === 0) {
+    }
+    elseif (strpos($data, 'delete_service_confirm_') === 0) {
         $username = str_replace('delete_service_confirm_', '', $data);
         $keyboard = ['inline_keyboard' => [[['text' => '✅ بله، حذف کن', 'callback_data' => "delete_service_do_{$username}"], ['text' => '❌ خیر، لغو', 'callback_data' => "service_details_{$username}"]]]];
         editMessageCaption($chat_id, $message_id, "⚠️ <b>آیا از حذف این سرویس مطمئن هستید؟</b>\nاین عمل غیرقابل بازگشت است و تمام اطلاعات سرویس پاک خواهد شد.", $keyboard);
-    } elseif (strpos($data, 'delete_service_do_') === 0) {
+    }
+    elseif (strpos($data, 'delete_service_do_') === 0) {
         $username = str_replace('delete_service_do_', '', $data);
         editMessageCaption($chat_id, $message_id, "⏳ در حال حذف سرویس...");
 
@@ -955,19 +1041,23 @@ if (isset($update['callback_query'])) {
             deleteUserService($chat_id, $username, $server_id);
             if ($result_marzban === null || (isset($result_marzban['detail']) && strpos($result_marzban['detail'], 'not found') !== false)) {
                 editMessageCaption($chat_id, $message_id, "✅ سرویس شما با موفقیت حذف شد.");
-            } else {
+            }
+            else {
                 editMessageCaption($chat_id, $message_id, "⚠️ سرویس از لیست شما حذف شد، اما ممکن است در حذف از پنل اصلی مشکلی رخ داده باشد. لطفا به پشتیبانی اطلاع دهید.");
                 error_log("Failed to delete marzban user {$username} on server {$server_id}. Response: " . json_encode($result_marzban));
             }
-        } else {
+        }
+        else {
             editMessageCaption($chat_id, $message_id, "❌ خطایی در یافتن اطلاعات سرور برای این سرویس رخ داد.");
         }
-    } elseif ($data == 'back_to_services') {
+    }
+    elseif ($data == 'back_to_services') {
         apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
         $services = getUserServices($chat_id);
         if (empty($services)) {
             sendMessage($chat_id, "شما هیچ سرویس فعالی ندارید.");
-        } else {
+        }
+        else {
             $keyboard_buttons = [];
             $now = time();
             foreach ($services as $service) {
@@ -980,14 +1070,21 @@ if (isset($update['callback_query'])) {
         }
     }
 
-    apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-    exit();
+    if (!USER_INLINE_KEYBOARD && !$apiRequest) {
+        handleMainMenu($chat_id, $first_name, true);
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
+    elseif ($apiRequest) {
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
 }
 
 // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
 // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ پردازش پیام‌ها ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
 // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
-if (isset($update['message'])) {
+if (isset($update['message']) || USER_INLINE_KEYBOARD) {
     $is_verified = $user_data['is_verified'] ?? 0;
     $verification_method = $settings['verification_method'] ?? 'off';
 
@@ -999,12 +1096,13 @@ if (isset($update['message'])) {
                 $message = "سلام! برای استفاده از امکانات ربات، لطفاً با کلیک روی دکمه زیر شماره تلفن خود را با ما به اشتراک بگذارید.";
                 $keyboard = ['keyboard' => [[['text' => '🔒 اشتراک‌گذاری شماره تلفن', 'request_contact' => true]]], 'resize_keyboard' => true, 'one_time_keyboard' => true];
                 sendMessage($chat_id, $message, $keyboard);
-                exit();
-            } elseif ($verification_method === 'button') {
+                die;
+            }
+            elseif ($verification_method === 'button') {
                 $message = "سلام! برای اطمینان از اینکه شما یک کاربر واقعی هستید، لطفاً روی دکمه زیر کلیک کنید.";
                 $keyboard = ['inline_keyboard' => [[['text' => '✅ تایید می‌کنم', 'callback_data' => 'verify_by_button']]]];
                 sendMessage($chat_id, $message, $keyboard);
-                exit();
+                die;
             }
         }
     }
@@ -1034,7 +1132,7 @@ if (isset($update['message'])) {
             sendMessage($chat_id, "✅ رسید شما برای ادمین ارسال شد. پس از بررسی، نتیجه به شما اطلاع داده خواهد شد.");
             updateUserData($chat_id, 'main_menu');
             handleMainMenu($chat_id, $first_name);
-            exit();
+            die;
         }
     }
 
@@ -1043,7 +1141,7 @@ if (isset($update['message'])) {
 
         if ($contact['user_id'] != $chat_id) {
             sendMessage($chat_id, "❌ لطفا فقط شماره تلفن خود را از طریق دکمه مخصوص به اشتراک بگذارید.");
-            exit();
+            die;
         }
 
         $phone_number = $contact['phone_number'];
@@ -1062,24 +1160,25 @@ if (isset($update['message'])) {
             $stmt->execute([$phone_number, $chat_id]);
             sendMessage($chat_id, "✅ احراز هویت شما با موفقیت انجام شد. از همراهی شما سپاسگزاریم!");
             handleMainMenu($chat_id, $first_name);
-        } else {
+        }
+        else {
             $message = "❌ متاسفانه شماره ارسالی شما مورد تایید نیست. این ربات فقط برای شماره‌های ایران (+98) فعال است.";
             $keyboard = ['keyboard' => [[['text' => '🔒 اشتراک‌گذاری شماره تلفن', 'request_contact' => true]]], 'resize_keyboard' => true, 'one_time_keyboard' => true];
             sendMessage($chat_id, $message, $keyboard);
         }
-        exit();
+        die;
     }
 
-    if (!isset($update['message']['text']) && !isset($update['message']['forward_from']) && $user_state !== 'admin_awaiting_guide_content') {
-        exit();
+    if (!isset($update['message']['text']) && !isset($update['message']['forward_from']) && $user_state !== 'admin_awaiting_guide_content' && !USER_INLINE_KEYBOARD) {
+        die;
     }
 
-    $text = trim($update['message']['text'] ?? '');
+    $text = trim($update['message']['text'] ?? ($update['callback_query']['data'] ?? ''));
 
     if ($text == '/start') {
         updateUserData($chat_id, 'main_menu', ['admin_view' => 'user']);
         handleMainMenu($chat_id, $first_name, true);
-        exit();
+        die;
     }
 
     if ($text == 'لغو' || $text == '◀️ بازگشت به منوی اصلی') {
@@ -1088,11 +1187,12 @@ if (isset($update['message'])) {
         if ($isAnAdmin && (strpos($user_state, 'admin_') === 0 || $admin_view_mode === 'admin')) {
             updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
             handleMainMenu($chat_id, $first_name, false);
-        } else {
+        }
+        else {
             updateUserData($chat_id, 'main_menu', ['admin_view' => 'user']);
             handleMainMenu($chat_id, $first_name, false);
         }
-        exit();
+        die;
     }
 
     if (isset($update['message']['forward_from']) || isset($update['message']['forward_from_chat'])) {
@@ -1114,7 +1214,7 @@ if (isset($update['message'])) {
             updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
             handleMainMenu($chat_id, $first_name);
         }
-        exit();
+        die;
     }
 
     if ($user_state !== 'main_menu') {
@@ -1149,7 +1249,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $state_data = $user_data['state_data'];
-                $state_data['new_plan_price'] = (int) $text;
+                $state_data['new_plan_price'] = (int)$text;
                 updateUserData($chat_id, 'awaiting_plan_volume', $state_data);
                 sendMessage($chat_id, "3/6 - لطفا حجم پلن را به گیگابایت (GB) وارد کنید (فقط عدد):", $cancelKeyboard);
                 break;
@@ -1163,7 +1263,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $state_data = $user_data['state_data'];
-                $state_data['new_plan_volume'] = (int) $text;
+                $state_data['new_plan_volume'] = (int)$text;
                 updateUserData($chat_id, 'awaiting_plan_duration', $state_data);
                 sendMessage($chat_id, "4/6 - لطفا مدت زمان پلن را به روز وارد کنید (فقط عدد):", $cancelKeyboard);
                 break;
@@ -1177,7 +1277,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $state_data = $user_data['state_data'];
-                $state_data['new_plan_duration'] = (int) $text;
+                $state_data['new_plan_duration'] = (int)$text;
                 updateUserData($chat_id, 'awaiting_plan_description', $state_data);
                 $keyboard = ['keyboard' => [[['text' => 'رد شدن'], ['text' => '◀️ بازگشت به منوی اصلی']]], 'resize_keyboard' => true];
                 sendMessage($chat_id, "5/6 - در صورت تمایل، توضیحات مختصری برای پلن وارد کنید (اختیاری):", $keyboard);
@@ -1201,7 +1301,7 @@ if (isset($update['message'])) {
                 if (!hasPermission($chat_id, 'manage_plans')) {
                     break;
                 }
-                if (!is_numeric($text) || (int) $text < 0) {
+                if (!is_numeric($text) || (int)$text < 0) {
                     sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح (مثبت یا صفر) وارد کنید.", $cancelKeyboard);
                     break;
                 }
@@ -1215,7 +1315,7 @@ if (isset($update['message'])) {
                     'volume_gb' => $state_data['new_plan_volume'],
                     'duration_days' => $state_data['new_plan_duration'],
                     'description' => $state_data['new_plan_description'],
-                    'purchase_limit' => (int) $text,
+                    'purchase_limit' => (int)$text,
                 ];
 
                 updateUserData($chat_id, 'awaiting_plan_sub_link_setting', ['temp_plan_data' => $new_plan_data]);
@@ -1289,7 +1389,8 @@ if (isset($update['message'])) {
                 $token = getMarzbanToken($new_server_id);
                 if ($token) {
                     sendMessage($chat_id, "✅ ارتباط با سرور '{$state_data['temp_server_name']}' با موفقیت برقرار شد.");
-                } else {
+                }
+                else {
                     sendMessage($chat_id, "⚠️ <b>هشدار:</b> ربات نتوانست به سرور جدید متصل شود. لطفا اطلاعات وارد شده را بررسی کرده و در صورت نیاز سرور را حذف و مجدداً اضافه کنید.");
                 }
                 handleMainMenu($chat_id, $first_name);
@@ -1308,53 +1409,53 @@ if (isset($update['message'])) {
                 generatePlanList($chat_id);
                 break;
             case 'admin_editing_plan_price':
-                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int) $text < 0) {
+                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int)$text < 0) {
                     sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح و مثبت وارد کنید.");
                     break;
                 }
                 $plan_id = $user_data['state_data']['editing_plan_id'];
                 pdo()
                     ->prepare("UPDATE plans SET price = ? WHERE id = ?")
-                    ->execute([(int) $text, $plan_id]);
+                    ->execute([(int)$text, $plan_id]);
                 sendMessage($chat_id, "✅ قیمت پلن با موفقیت تغییر کرد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 generatePlanList($chat_id);
                 break;
             case 'admin_editing_plan_volume':
-                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int) $text < 0) {
+                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int)$text < 0) {
                     sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح و مثبت وارد کنید.");
                     break;
                 }
                 $plan_id = $user_data['state_data']['editing_plan_id'];
                 pdo()
                     ->prepare("UPDATE plans SET volume_gb = ? WHERE id = ?")
-                    ->execute([(int) $text, $plan_id]);
+                    ->execute([(int)$text, $plan_id]);
                 sendMessage($chat_id, "✅ حجم پلن با موفقیت تغییر کرد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 generatePlanList($chat_id);
                 break;
             case 'admin_editing_plan_duration':
-                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int) $text < 0) {
+                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int)$text < 0) {
                     sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح و مثبت وارد کنید.");
                     break;
                 }
                 $plan_id = $user_data['state_data']['editing_plan_id'];
                 pdo()
                     ->prepare("UPDATE plans SET duration_days = ? WHERE id = ?")
-                    ->execute([(int) $text, $plan_id]);
+                    ->execute([(int)$text, $plan_id]);
                 sendMessage($chat_id, "✅ مدت زمان پلن با موفقیت تغییر کرد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 generatePlanList($chat_id);
                 break;
             case 'admin_editing_plan_limit':
-                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int) $text < 0) {
+                if (!hasPermission($chat_id, 'manage_plans') || !is_numeric($text) || (int)$text < 0) {
                     sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح و مثبت (یا صفر) وارد کنید.");
                     break;
                 }
                 $plan_id = $user_data['state_data']['editing_plan_id'];
                 pdo()
                     ->prepare("UPDATE plans SET purchase_limit = ? WHERE id = ?")
-                    ->execute([(int) $text, $plan_id]);
+                    ->execute([(int)$text, $plan_id]);
                 sendMessage($chat_id, "✅ محدودیت خرید پلن با موفقیت تغییر کرد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 generatePlanList($chat_id);
@@ -1462,7 +1563,8 @@ if (isset($update['message'])) {
                     $user_keyboard = ['inline_keyboard' => [[['text' => '💬 پاسخ مجدد', 'callback_data' => "reply_ticket_{$ticket_id}"], ['text' => '✖️ بستن تیکت', 'callback_data' => "close_ticket_{$ticket_id}"]]]];
                     sendMessage($target_user_id, $user_message, $user_keyboard);
                     sendMessage($chat_id, "✅ پاسخ شما برای کاربر ارسال شد.");
-                } else {
+                }
+                else {
                     sendMessage($chat_id, "❌ خطایی در ارسال پاسخ رخ داد. تیکت یا کاربر یافت نشد.");
                 }
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -1491,7 +1593,7 @@ if (isset($update['message'])) {
                 }
                 $state_data = $user_data['state_data'];
                 $target_id = $state_data['target_user_id'];
-                updateUserBalance($target_id, (int) $text, 'add');
+                updateUserBalance($target_id, (int)$text, 'add');
                 $new_balance_data = getUserData($target_id, '');
                 sendMessage($chat_id, "✅ مبلغ " . number_format($text) . " تومان با موفقیت به موجودی کاربر <code>$target_id</code> اضافه شد.");
                 sendMessage($target_id, "✅ مبلغ " . number_format($text) . " تومان توسط ادمین به موجودی شما اضافه شد.\nموجودی جدید: " . number_format($new_balance_data['balance']) . " تومان.");
@@ -1522,11 +1624,11 @@ if (isset($update['message'])) {
                 $state_data = $user_data['state_data'];
                 $target_id = $state_data['target_user_id'];
                 $target_user_data = getUserData($target_id, '');
-                if ($target_user_data['balance'] < (int) $text) {
+                if ($target_user_data['balance'] < (int)$text) {
                     sendMessage($chat_id, "❌ موجودی کاربر برای کسر این مبلغ کافی نیست.\nموجودی فعلی: " . number_format($target_user_data['balance']) . " تومان", $cancelKeyboard);
                     break;
                 }
-                updateUserBalance($target_id, (int) $text, 'deduct');
+                updateUserBalance($target_id, (int)$text, 'deduct');
                 $new_balance_data = getUserData($target_id, '');
                 sendMessage($chat_id, "✅ مبلغ " . number_format($text) . " تومان با موفقیت از موجودی کاربر <code>$target_id</code> کسر شد.");
                 sendMessage($target_id, "❗️ مبلغ " . number_format($text) . " تومان توسط ادمین از موجودی شما کسر شد.\nموجودی جدید: " . number_format($new_balance_data['balance']) . " تومان.");
@@ -1557,7 +1659,8 @@ if (isset($update['message'])) {
                 $decoded_result = json_decode($result, true);
                 if ($decoded_result && $decoded_result['ok']) {
                     sendMessage($chat_id, "✅ پیام شما با موفقیت به کاربر <code>$target_id</code> ارسال شد.");
-                } else {
+                }
+                else {
                     sendMessage($chat_id, "❌ ارسال پیام به کاربر <code>$target_id</code> ناموفق بود. ممکن است کاربر ربات را بلاک کرده باشد.");
                 }
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -1643,7 +1746,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $settings = getSettings();
-                $settings['welcome_gift_balance'] = (int) $text;
+                $settings['welcome_gift_balance'] = (int)$text;
                 saveSettings($settings);
                 sendMessage($chat_id, "✅ هدیه عضویت برای کاربران جدید روی " . number_format($text) . " تومان تنظیم شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -1659,7 +1762,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 sendMessage($chat_id, "⏳ عملیات افزودن حجم به تمام سرویس‌ها شروع شد. این فرآیند ممکن است کمی طول بکشد...");
-                $data_to_add_gb = (float) $text;
+                $data_to_add_gb = (float)$text;
                 $bytes_to_add = $data_to_add_gb * 1024 * 1024 * 1024;
                 $all_services = pdo()
                     ->query("SELECT marzban_username, server_id FROM services")
@@ -1682,11 +1785,13 @@ if (isset($update['message'])) {
                             $result = modifyMarzbanUser($username, $server_id, ['data_limit' => $new_limit]);
                             if ($result && !isset($result['detail'])) {
                                 $success_count++;
-                            } else {
+                            }
+                            else {
                                 $fail_count++;
                             }
                         }
-                    } else {
+                    }
+                    else {
                         $fail_count++;
                     }
                     usleep(100000);
@@ -1705,7 +1810,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 sendMessage($chat_id, "⏳ عملیات افزودن زمان به تمام سرویس‌ها شروع شد. این فرآیند ممکن است کمی طول بکشد...");
-                $days_to_add = (int) $text;
+                $days_to_add = (int)$text;
                 $seconds_to_add = $days_to_add * 86400;
                 $all_services = pdo()
                     ->query("SELECT marzban_username, server_id FROM services")
@@ -1728,11 +1833,13 @@ if (isset($update['message'])) {
                             $result = modifyMarzbanUser($username, $server_id, ['expire' => $new_expire]);
                             if ($result && !isset($result['detail'])) {
                                 $success_count++;
-                            } else {
+                            }
+                            else {
                                 $fail_count++;
                             }
                         }
-                    } else {
+                    }
+                    else {
                         $fail_count++;
                     }
                     usleep(100000);
@@ -1750,7 +1857,7 @@ if (isset($update['message'])) {
                     sendMessage($chat_id, "❌ شناسه وارد شده نامعتبر است. لطفا فقط عدد وارد کنید.", $cancelKeyboard);
                     break;
                 }
-                $target_id = (int) $text;
+                $target_id = (int)$text;
                 if ($target_id == ADMIN_CHAT_ID) {
                     sendMessage($chat_id, "❌ شما نمی‌توانید خودتان را به عنوان ادمین اضافه کنید.", $cancelKeyboard);
                     break;
@@ -1771,7 +1878,8 @@ if (isset($update['message'])) {
                 $target_first_name = "کاربر {$target_id}";
                 if ($chat_info['ok'] && isset($chat_info['result']['first_name'])) {
                     $target_first_name = $chat_info['result']['first_name'];
-                } else {
+                }
+                else {
                     sendMessage($chat_id, "⚠️ نتوانستم نام کاربر را از تلگرام دریافت کنم. با نام پیش‌فرض ثبت شد.");
                 }
                 addAdmin($target_id, $target_first_name);
@@ -1793,7 +1901,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $state_data = $user_data['state_data'];
-                $state_data['new_discount_value'] = (int) $text;
+                $state_data['new_discount_value'] = (int)$text;
                 updateUserData($chat_id, 'admin_awaiting_discount_usage', $state_data);
                 sendMessage($chat_id, "4/4 - حداکثر تعداد استفاده از این کد را وارد کنید (فقط عدد):", $cancelKeyboard);
                 break;
@@ -1805,7 +1913,7 @@ if (isset($update['message'])) {
                 }
                 $discount_data = $user_data['state_data'];
                 $stmt = pdo()->prepare("INSERT INTO discount_codes (code, type, value, max_usage) VALUES (?, ?, ?, ?)");
-                $stmt->execute([$discount_data['new_discount_code'], $discount_data['new_discount_type'], $discount_data['new_discount_value'], (int) $text]);
+                $stmt->execute([$discount_data['new_discount_code'], $discount_data['new_discount_type'], $discount_data['new_discount_value'], (int)$text]);
                 sendMessage($chat_id, "✅ کد تخفیف `{$discount_data['new_discount_code']}` با موفقیت ایجاد شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 $current_first_name = $update['message']['from']['first_name'];
@@ -1834,7 +1942,8 @@ if (isset($update['message'])) {
                     $discounted_price = 0;
                     if ($discount['type'] == 'percent') {
                         $discounted_price = $original_price - ($original_price * $discount['value']) / 100;
-                    } else {
+                    }
+                    else {
                         $discounted_price = $original_price - $discount['value'];
                     }
                     $discounted_price = max(0, $discounted_price);
@@ -1854,7 +1963,7 @@ if (isset($update['message'])) {
                     sendMessage($chat_id, "❌ لطفا یک مبلغ معتبر (عدد مثبت) به تومان وارد کنید.", $cancelKeyboard);
                     break;
                 }
-                $amount_to_add = (int) $text;
+                $amount_to_add = (int)$text;
                 sendMessage($chat_id, "⏳ عملیات افزایش موجودی همگانی شروع شد...");
                 $updated_users_count = increaseAllUsersBalance($amount_to_add);
                 sendMessage($chat_id, "✅ عملیات با موفقیت انجام شد.\nمبلغ <b>" . number_format($amount_to_add) . " تومان</b> به موجودی <b>{$updated_users_count}</b> کاربر فعال اضافه گردید.");
@@ -1879,7 +1988,8 @@ if (isset($update['message'])) {
                     $state_data['new_guide_content_type'] = 'photo';
                     $state_data['new_guide_photo_id'] = $update['message']['photo'][count($update['message']['photo']) - 1]['file_id'];
                     $state_data['new_guide_message_text'] = $update['message']['caption'] ?? '';
-                } else {
+                }
+                else {
                     $state_data['new_guide_content_type'] = 'text';
                     $state_data['new_guide_photo_id'] = null;
                     $state_data['new_guide_message_text'] = $text;
@@ -1900,7 +2010,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $settings = getSettings();
-                $settings['test_config_usage_limit'] = (int) $text;
+                $settings['test_config_usage_limit'] = (int)$text;
                 saveSettings($settings);
                 sendMessage($chat_id, "✅ تعداد مجاز برای هر کاربر روی <b>{$text}</b> بار تنظیم شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -1945,7 +2055,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $settings = getSettings();
-                $settings['notification_expire_days'] = (int) $text;
+                $settings['notification_expire_days'] = (int)$text;
                 saveSettings($settings);
                 sendMessage($chat_id, "✅ با موفقیت روی <b>{$text}</b> روز تنظیم شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -1961,7 +2071,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $settings = getSettings();
-                $settings['notification_expire_gb'] = (int) $text;
+                $settings['notification_expire_gb'] = (int)$text;
                 saveSettings($settings);
                 sendMessage($chat_id, "✅ با موفقیت روی <b>{$text}</b> گیگابایت تنظیم شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -1989,7 +2099,7 @@ if (isset($update['message'])) {
                     break;
                 }
                 $settings = getSettings();
-                $settings['notification_inactive_days'] = (int) $text;
+                $settings['notification_inactive_days'] = (int)$text;
                 saveSettings($settings);
                 sendMessage($chat_id, "✅ با موفقیت روی <b>{$text}</b> روز تنظیم شد.");
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
@@ -2008,7 +2118,7 @@ if (isset($update['message'])) {
                 $data = 'config_inactive_reminder';
                 break;
         }
-        exit();
+        die;
     }
 
     switch ($text) {
@@ -2020,7 +2130,8 @@ if (isset($update['message'])) {
             $categories = getCategories(true);
             if (empty($categories)) {
                 sendMessage($chat_id, "متاسفانه در حال حاضر هیچ سرویسی برای فروش موجود نیست.");
-            } else {
+            }
+            else {
                 $keyboard_buttons = [];
                 foreach ($categories as $category) {
                     $keyboard_buttons[] = [['text' => '🛍 ' . $category['name'], 'callback_data' => 'cat_' . $category['id']]];
@@ -2194,12 +2305,14 @@ if (isset($update['message'])) {
         case '⚙️ تنظیمات کلی ربات':
             if ($isAnAdmin && hasPermission($chat_id, 'manage_settings')) {
                 $bot_status_text = $settings['bot_status'] == 'on' ? '🔴 خاموش کردن ربات' : '🟢 روشن کردن ربات';
+                $inline_keyboard_text = $settings['inline_keyboard'] == 'on' ? '🔴 غیرفعال کردن کیبورد شیشه ای' : '🟢 فعال کردن کیبورد شیشه ای';
                 $sales_status_text = $settings['sales_status'] == 'on' ? '🔴 خاموش کردن فروش' : '🟢 روشن کردن فروش';
                 $join_status_text = $settings['join_channel_status'] == 'on' ? '🔴 غیرفعال کردن جوین' : '🟢 فعال کردن جوین';
                 $message = "<b>⚙️ تنظیمات کلی ربات:</b>";
                 $keyboard = [
                     'keyboard' => [
                         [['text' => $bot_status_text]],
+                        [['text' => $inline_keyboard_text]],
                         [['text' => $sales_status_text]],
                         [['text' => $join_status_text], ['text' => '📢 تنظیم کانال جوین']],
                         [['text' => '🎁 تنظیم هدیه عضویت']],
@@ -2215,6 +2328,15 @@ if (isset($update['message'])) {
             if ($isAnAdmin && hasPermission($chat_id, 'manage_settings')) {
                 updateUserData($chat_id, 'admin_awaiting_welcome_gift_amount', ['admin_view' => 'admin']);
                 sendMessage($chat_id, "لطفا مبلغ هدیه برای کاربران جدید را به تومان وارد کنید (برای غیرفعال کردن عدد 0 را وارد کنید):", $cancelKeyboard);
+            }
+            break;
+
+        case '🔴 غیرفعال کردن کیبورد شیشه ای':
+        case '🟢 فعال کردن کیبورد شیشه ای':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_settings')) {
+                $settings['inline_keyboard'] = $settings['inline_keyboard'] == 'on' ? 'off' : 'on';
+                saveSettings($settings);
+                sendMessage($chat_id, "✅ وضعیت کیبورد ربات با موفقیت تغییر کرد.\nمجدد /start کنید.");
             }
             break;
 
@@ -2374,7 +2496,8 @@ if (isset($update['message'])) {
             foreach ($services as $service) {
                 if ($service['expire_timestamp'] < $now) {
                     $expired_services_count++;
-                } else {
+                }
+                else {
                     $active_services_count++;
                 }
             }
@@ -2398,7 +2521,8 @@ if (isset($update['message'])) {
             $services = getUserServices($chat_id);
             if (empty($services)) {
                 sendMessage($chat_id, "شما هیچ سرویس فعالی ندارید.");
-            } else {
+            }
+            else {
                 $keyboard_buttons = [];
                 $now = time();
                 foreach ($services as $service) {
@@ -2428,7 +2552,7 @@ if (isset($update['message'])) {
             }
 
             $settings = getSettings();
-            $usage_limit = (int) ($settings['test_config_usage_limit'] ?? 1);
+            $usage_limit = (int)($settings['test_config_usage_limit'] ?? 1);
 
             if ($user_data['test_config_count'] >= $usage_limit) {
                 sendMessage($chat_id, "❌ شما قبلا از حداکثر تعداد کانفیگ تست خود استفاده کرده‌اید.");
@@ -2487,7 +2611,7 @@ if (isset($update['message'])) {
             break;
 
         default:
-            if ($user_state === 'main_menu') {
+            if ($user_state === 'main_menu' && !$apiRequest) {
                 sendMessage($chat_id, "دستور شما را متوجه نشدم. لطفا از دکمه‌های موجود استفاده کنید.");
             }
             break;

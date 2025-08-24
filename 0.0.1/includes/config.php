@@ -8,6 +8,8 @@ define('BOT_TOKEN', 'TOKEN');
 
 define('ADMIN_CHAT_ID', 123456789);
 
+define('SECRET_TOKEN', 'SECRET');
+
 // ---------------------------------------------------------------------
 // ---                         مسیرهای پروژه                           ---
 // ---------------------------------------------------------------------
@@ -33,4 +35,3 @@ if (!is_dir(DATA_DIR)) {
         die('Failed to create data directory. Please check server permissions.');
     }
 }
-?>

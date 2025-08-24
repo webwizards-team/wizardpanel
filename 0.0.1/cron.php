@@ -129,4 +129,3 @@ try {
 }
 
 echo "Cron job finished at " . date('Y-m-d H:i:s') . "\n";
-?>
