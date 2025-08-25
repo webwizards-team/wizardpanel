@@ -6,8 +6,7 @@ class Database
 
     private $pdo;
 
-    private function __construct()
-    {
+    private function __construct() {
         $dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4';
 
         $options = [
@@ -27,22 +26,18 @@ class Database
         }
     }
 
-    public static function getInstance()
-    {
+    public static function getInstance() {
         if (self::$instance == null) {
             self::$instance = new Database();
         }
         return self::$instance;
     }
 
-    public function getConnection()
-    {
+    public function getConnection() {
         return $this->pdo;
     }
 }
 
-function pdo()
-{
+function pdo() {
     return Database::getInstance()->getConnection();
 }
-?>

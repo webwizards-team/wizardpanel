@@ -89,7 +89,7 @@ if (isset($update['callback_query'])) {
     if ($data === 'check_join') {
         if (checkJoinStatus($chat_id)) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             handleMainMenu($chat_id, $first_name, true);
         }
         else {
@@ -132,7 +132,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("DELETE FROM categories WHERE id = ?")
                 ->execute([$cat_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ حذف شد']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generateCategoryList($chat_id);
         }
         elseif (strpos($data, 'toggle_cat_') === 0 && hasPermission($chat_id, 'manage_categories')) {
@@ -141,7 +141,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE categories SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
                 ->execute([$cat_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generateCategoryList($chat_id);
         }
         elseif (strpos($data, 'delete_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -150,7 +150,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("DELETE FROM plans WHERE id = ?")
                 ->execute([$plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ پلن حذف شد']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
         }
         elseif (strpos($data, 'toggle_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
             $plan_id = str_replace('toggle_plan_', '', $data);
@@ -158,7 +158,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE plans SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
                 ->execute([$plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
         elseif (strpos($data, 'edit_plan_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -179,7 +179,7 @@ if (isset($update['callback_query'])) {
             }
         }
         elseif (strpos($data, 'back_to_plan_view_') === 0 && hasPermission($chat_id, 'manage_plans')) {
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
         elseif (strpos($data, 'edit_plan_field_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -238,7 +238,7 @@ if (isset($update['callback_query'])) {
                     break;
             }
             if ($field !== 'category' && $field !== 'server') {
-                apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+                deleteMessage($chat_id, $message_id);
             }
         }
         elseif (strpos($data, 'set_plan_category_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -249,7 +249,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE plans SET category_id = ? WHERE id = ?")
                 ->execute([$category_id, $plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ دسته‌بندی پلن با موفقیت تغییر کرد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
         elseif (strpos($data, 'set_plan_server_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -260,7 +260,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE plans SET server_id = ? WHERE id = ?")
                 ->execute([$server_id, $plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ سرور پلن با موفقیت تغییر کرد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
         elseif (strpos($data, 'p_cat_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -290,7 +290,7 @@ if (isset($update['callback_query'])) {
             ];
             updateUserData($chat_id, 'awaiting_plan_name', $state_data);
             sendMessage($chat_id, "1/6 - لطفا نام پلن را وارد کنید:", $cancelKeyboard);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
         }
         elseif (strpos($data, 'copy_toggle_') === 0 && hasPermission($chat_id, 'manage_payment')) {
             $toggle = str_replace('copy_toggle_', '', $data) === 'yes';
@@ -365,7 +365,7 @@ if (isset($update['callback_query'])) {
             editMessageText($chat_id, $message_id, "<b>🌐 مدیریت سرورهای مرزبان</b>\n\nسرور مورد نظر را برای مشاهده یا حذف انتخاب کنید، یا یک سرور جدید اضافه کنید:", ['inline_keyboard' => $keyboard_buttons]);
         }
         elseif ($data === 'add_marzban_server' && hasPermission($chat_id, 'manage_marzban')) {
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             updateUserData($chat_id, 'admin_awaiting_server_name');
             sendMessage($chat_id, "مرحله ۱/۴: یک نام دلخواه برای شناسایی سرور وارد کنید (مثال: آلمان-هتزنر):", $cancelKeyboard);
         }
@@ -449,7 +449,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("DELETE FROM discount_codes WHERE id = ?")
                 ->execute([$code_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ کد تخفیف حذف شد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
         }
         elseif (strpos($data, 'toggle_discount_') === 0) {
             $code_id = str_replace('toggle_discount_', '', $data);
@@ -457,7 +457,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE discount_codes SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
                 ->execute([$code_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت کد تخفیف تغییر کرد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generateDiscountCodeList($chat_id);
         }
         elseif (strpos($data, 'delete_guide_') === 0 && hasPermission($chat_id, 'manage_guides')) {
@@ -466,7 +466,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("DELETE FROM guides WHERE id = ?")
                 ->execute([$guide_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ راهنما حذف شد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generateGuideList($chat_id);
         }
         elseif (strpos($data, 'toggle_guide_') === 0 && hasPermission($chat_id, 'manage_guides')) {
@@ -475,7 +475,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE guides SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")
                 ->execute([$guide_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت راهنما تغییر کرد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generateGuideList($chat_id);
         }
         elseif (strpos($data, 'reset_plan_count_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -484,7 +484,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE plans SET purchase_count = 0 WHERE id = ?")
                 ->execute([$plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ تعداد خرید با موفقیت ریست شد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
 
@@ -495,7 +495,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE plans SET is_test_plan = 1, price = 0, status = 'active' WHERE id = ?")
                 ->execute([$plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ این پلن به عنوان پلن تست تنظیم شد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
         elseif (strpos($data, 'make_plan_normal_') === 0 && hasPermission($chat_id, 'manage_plans')) {
@@ -504,7 +504,7 @@ if (isset($update['callback_query'])) {
                 ->prepare("UPDATE plans SET is_test_plan = 0 WHERE id = ?")
                 ->execute([$plan_id]);
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ این پلن به یک پلن عادی تبدیل شد.']);
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             generatePlanList($chat_id);
         }
 
@@ -586,7 +586,7 @@ if (isset($update['callback_query'])) {
             $data = 'config_inactive_reminder';
         }
         elseif (in_array($data, ['set_expire_days', 'set_expire_gb', 'edit_expire_message', 'set_inactive_days', 'edit_inactive_message']) && hasPermission($chat_id, 'manage_notifications')) {
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             switch ($data) {
                 case 'set_expire_days':
                     updateUserData($chat_id, 'admin_awaiting_expire_days');
@@ -733,7 +733,7 @@ if (isset($update['callback_query'])) {
             }
             elseif ($data == 'back_to_admin_panel') {
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
-                apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+                deleteMessage($chat_id, $message_id);
                 handleMainMenu($chat_id, $first_name);
             }
         }
@@ -799,7 +799,7 @@ if (isset($update['callback_query'])) {
         $stmt->execute([$guide_id]);
         $guide = $stmt->fetch();
         if ($guide) {
-            apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+            deleteMessage($chat_id, $message_id);
             $keyboard = null;
             if (!empty($guide['inline_keyboard'])) {
                 $keyboard = json_decode($guide['inline_keyboard'], true);
@@ -818,7 +818,7 @@ if (isset($update['callback_query'])) {
     elseif (strpos($data, 'cat_') === 0) {
         $categoryId = str_replace('cat_', '', $data);
         showPlansForCategory($chat_id, $categoryId);
-        apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+        deleteMessage($chat_id, $message_id);
     }
     elseif (strpos($data, 'apply_discount_code_') === 0) {
         $category_id = str_replace('apply_discount_code_', '', $data);
@@ -945,7 +945,7 @@ if (isset($update['callback_query'])) {
         }
     }
     elseif ($data == 'back_to_categories') {
-        apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+        deleteMessage($chat_id, $message_id);
         $categories = getCategories(true);
         $keyboard_buttons = [];
         foreach ($categories as $category) {
@@ -1009,7 +1009,7 @@ if (isset($update['callback_query'])) {
                         [['text' => '◀️ بازگشت به لیست', 'callback_data' => 'back_to_services']],
                     ],
                 ];
-                apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+                deleteMessage($chat_id, $message_id);
                 sendPhoto($chat_id, $qr_code_url, trim($caption), $keyboard);
             }
             else {
@@ -1052,7 +1052,7 @@ if (isset($update['callback_query'])) {
         }
     }
     elseif ($data == 'back_to_services') {
-        apiRequest('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+        deleteMessage($chat_id, $message_id);
         $services = getUserServices($chat_id);
         if (empty($services)) {
             sendMessage($chat_id, "شما هیچ سرویس فعالی ندارید.");

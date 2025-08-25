@@ -140,6 +140,14 @@ function editMessageCaption($chat_id, $message_id, $caption, $keyboard = null) {
     return apiRequest('editMessageCaption', $params);
 }
 
+function deleteMessage($chat_id, $message_id) {
+    global $update, $oneTimeEdit;
+    if (USER_INLINE_KEYBOARD && !$oneTimeEdit && $update['callback_query']['message']['message_id'] == $message_id) return false;
+
+    $params = ['chat_id' => $chat_id, 'message_id' => $message_id];
+    return apiRequest('deleteMessage', $params);
+}
+
 function apiRequest($method, $params = []) {
     global $apiRequest;
     $apiRequest = true;
@@ -791,7 +799,7 @@ function handleMainMenu($chat_id, $first_name, $is_start_command = false) {
     $stmt = pdo()->prepare("SELECT inline_keyboard FROM users WHERE chat_id = ?");
     $stmt->execute([$chat_id]);
     $inline_keyboard = $stmt->fetch()['inline_keyboard'];
-    if (USER_INLINE_KEYBOARD && $inline_keyboard != 1) {
+    if (USER_INLINE_KEYBOARD && ($inline_keyboard != 1 || $is_start_command)) {
         $stmt = pdo()->prepare("UPDATE users SET inline_keyboard = '1' WHERE chat_id = ?");
         $stmt->execute([$chat_id]);
 
