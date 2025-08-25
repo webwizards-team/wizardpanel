@@ -1,7 +1,6 @@
 <?php
 
-function marzbanApiRequest($endpoint, $server_id, $method = 'GET', $data = [], $accessToken = null)
-{
+function marzbanApiRequest($endpoint, $server_id, $method = 'GET', $data = [], $accessToken = null) {
     $stmt = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
     $stmt->execute([$server_id]);
     $server_info = $stmt->fetch();
@@ -24,6 +23,8 @@ function marzbanApiRequest($endpoint, $server_id, $method = 'GET', $data = [], $
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_TIMEOUT => 15,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
     ]);
 
     switch ($method) {
@@ -51,8 +52,7 @@ function marzbanApiRequest($endpoint, $server_id, $method = 'GET', $data = [], $
     return json_decode($response, true);
 }
 
-function getMarzbanToken($server_id)
-{
+function getMarzbanToken($server_id) {
     $stmt = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
     $stmt->execute([$server_id]);
     $server_info = $stmt->fetch();
@@ -88,6 +88,8 @@ function getMarzbanToken($server_id)
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $postData,
         CURLOPT_TIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
     ]);
 
     $response_body = curl_exec($ch);
@@ -118,8 +120,7 @@ function getMarzbanToken($server_id)
     return false;
 }
 
-function createMarzbanUser($plan, $chat_id, $plan_id)
-{
+function createMarzbanUser($plan, $chat_id, $plan_id) {
     $server_id = $plan['server_id'];
     $accessToken = getMarzbanToken($server_id);
     if (!$accessToken) {
@@ -159,8 +160,7 @@ function createMarzbanUser($plan, $chat_id, $plan_id)
     return false;
 }
 
-function getMarzbanUser($username, $server_id)
-{
+function getMarzbanUser($username, $server_id) {
     $accessToken = getMarzbanToken($server_id);
     if (!$accessToken) {
         return false;
@@ -169,8 +169,7 @@ function getMarzbanUser($username, $server_id)
     return marzbanApiRequest("/api/user/{$username}", $server_id, 'GET', [], $accessToken);
 }
 
-function modifyMarzbanUser($username, $server_id, $data)
-{
+function modifyMarzbanUser($username, $server_id, $data) {
     $accessToken = getMarzbanToken($server_id);
     if (!$accessToken) {
         return false;
@@ -179,8 +178,7 @@ function modifyMarzbanUser($username, $server_id, $data)
     return marzbanApiRequest("/api/user/{$username}", $server_id, 'PUT', $data, $accessToken);
 }
 
-function deleteMarzbanUser($username, $server_id)
-{
+function deleteMarzbanUser($username, $server_id) {
     $accessToken = getMarzbanToken($server_id);
     if (!$accessToken) {
         return false;
@@ -188,4 +186,3 @@ function deleteMarzbanUser($username, $server_id)
 
     return marzbanApiRequest("/api/user/{$username}", $server_id, 'DELETE', [], $accessToken);
 }
-?>
