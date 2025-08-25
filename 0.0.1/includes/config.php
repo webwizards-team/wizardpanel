@@ -21,9 +21,9 @@ define('DATA_DIR', __DIR__ . '/../data');
 // ---                   تنظیمات اتصال به پایگاه داده                  ---
 // ---------------------------------------------------------------------
 
-define('DB_HOST', 'localhost');     
-define('DB_NAME', 'NAME');   
-define('DB_USER', 'USER');  
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'NAME');
+define('DB_USER', 'USER');
 define('DB_PASS', 'PASSWORD');
 
 // ---------------------------------------------------------------------
