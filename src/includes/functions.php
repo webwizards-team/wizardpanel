@@ -1,5 +1,10 @@
 <?php
 
+// فراخوانی تمام فایل‌های API در ابتدای فایل
+require_once __DIR__ . '/../api/marzban_api.php';
+require_once __DIR__ . '/../api/sanaei_api.php';
+require_once __DIR__ . '/../api/marzneshin_api.php';
+
 // =====================================================================
 // ---                 توابع اصلی API تلگرام                         ---
 // =====================================================================
@@ -96,11 +101,12 @@ function sendMessage($chat_id, $text, $keyboard = null, $handleMainMenu = false)
     $params = ['chat_id' => $chat_id, 'text' => $text, 'reply_markup' => handleKeyboard($keyboard, $handleMainMenu), 'parse_mode' => 'HTML'];
 
     global $update, $oneTimeEdit;
-    if (USER_INLINE_KEYBOARD && $update['callback_query']['message']['message_id'] && $oneTimeEdit) {
+    if (USER_INLINE_KEYBOARD && isset($update['callback_query']['message']['message_id']) && $oneTimeEdit) {
         $oneTimeEdit = false;
         $params['message_id'] = $update['callback_query']['message']['message_id'];
         $result = apiRequest('editMessageText', $params);
-        if (!json_decode($result, true)['ok']) {
+        $decoded_result = json_decode($result, true);
+        if (!$decoded_result || !$decoded_result['ok']) {
             unset($params['message_id']);
             return apiRequest('sendMessage', $params);
         }
@@ -130,6 +136,7 @@ function editMessageText($chat_id, $message_id, $text, $keyboard = null) {
         return apiRequest('editMessageText', $params);
     }
     else {
+    
         unset($params['message_id']);
         return apiRequest('sendMessage', $params);
     }
@@ -142,7 +149,7 @@ function editMessageCaption($chat_id, $message_id, $caption, $keyboard = null) {
 
 function deleteMessage($chat_id, $message_id) {
     global $update, $oneTimeEdit;
-    if (USER_INLINE_KEYBOARD && !$oneTimeEdit && $update['callback_query']['message']['message_id'] == $message_id) return false;
+    if (USER_INLINE_KEYBOARD && !$oneTimeEdit && isset($update['callback_query']['message']['message_id']) && $update['callback_query']['message']['message_id'] == $message_id) return false;
 
     $params = ['chat_id' => $chat_id, 'message_id' => $message_id];
     return apiRequest('deleteMessage', $params);
@@ -310,7 +317,6 @@ function getSettings() {
         'join_channel_status' => 'off',
         'welcome_gift_balance' => '0',
         'payment_method' => json_encode(['card_number' => '', 'card_holder' => '', 'copy_enabled' => false]),
-        'marzban_panel' => json_encode([]),
         'notification_expire_status' => 'off',
         'notification_expire_days' => '3',
         'notification_expire_gb' => '1',
@@ -415,7 +421,7 @@ function getPermissionMap() {
         'broadcast' => '📣 ارسال همگانی',
         'view_stats' => '📊 آمارها',
         'manage_payment' => '💳 مدیریت پرداخت',
-        'manage_marzban' => '🌐 مدیریت مرزبان',
+        'manage_marzban' => '🌐 مدیریت سرورها',
         'manage_settings' => '⚙️ تنظیمات کلی ربات',
         'view_tickets' => '📨 مشاهده تیکت‌ها',
         'manage_guides' => '📚 مدیریت راهنما',
@@ -570,7 +576,7 @@ function generateCategoryList($chat_id) {
 
 function generatePlanList($chat_id) {
     $plans = pdo()
-        ->query("SELECT p.*, s.name as server_name FROM plans p LEFT JOIN servers s ON p.server_id = s.id ORDER BY p.is_test_plan DESC, p.id ASC")
+        ->query("SELECT p.*, s.name as server_name, s.type as server_type FROM plans p LEFT JOIN servers s ON p.server_id = s.id ORDER BY p.is_test_plan DESC, p.id ASC")
         ->fetchAll(PDO::FETCH_ASSOC);
     $categories_raw = getCategories();
     $categories = array_column($categories_raw, 'name', 'id');
@@ -596,17 +602,24 @@ function generatePlanList($chat_id) {
             $plan_info .= "{$status_icon} <b>{$plan['name']}</b>\n";
         }
 
-        $plan_info .= "▫️ سرور: <b>{$server_name}</b>\n" . "▫️ دسته‌بندی: {$cat_name}\n" . "▫️ قیمت: " . number_format($plan['price']) . " تومان\n" . "▫️ حجم: {$plan['volume_gb']} گیگابایت | " . "مدت: {$plan['duration_days']} روز\n";
+        $plan_info .= "▫️ سرور: <b>{$server_name}</b>\n";
+        
+        if ($plan['server_type'] === 'sanaei' && !empty($plan['inbound_id'])) {
+            $plan_info .= "▫️ اینباند: <b>{$plan['inbound_id']}</b>\n";
+        } elseif ($plan['server_type'] === 'marzneshin' && !empty($plan['marzneshin_service_id'])) {
+            $plan_info .= "▫️ سرویس: <b>{$plan['marzneshin_service_id']}</b>\n";
+        }
+        
+        $plan_info .= "▫️ دسته‌بندی: {$cat_name}\n" . "▫️ قیمت: " . number_format($plan['price']) . " تومان\n" . "▫️ حجم: {$plan['volume_gb']} گیگابایت | " . "مدت: {$plan['duration_days']} روز\n";
 
         if ($plan['purchase_limit'] > 0) {
             $plan_info .= "📈 تعداد خرید: <b>{$plan['purchase_count']} / {$plan['purchase_limit']}</b>\n";
         }
 
         $keyboard_buttons = [];
-        // دکمه‌های اصلی مدیریت
-        $keyboard_buttons[] = [['text' => "🗑 حذف", 'callback_data' => "delete_plan_{$plan_id}"], ['text' => $status_action, 'callback_data' => "toggle_plan_{$plan_id}"], ['text' => "✏️ ویرایش", 'callback_data' => "edit_plan_{$plan_id}"]];
+        // --- open_plan_editor ---
+        $keyboard_buttons[] = [['text' => "🗑 حذف", 'callback_data' => "delete_plan_{$plan_id}"], ['text' => $status_action, 'callback_data' => "toggle_plan_{$plan_id}"], ['text' => "✏️ ویرایش", 'callback_data' => "open_plan_editor_{$plan_id}"]];
 
-        // دکمه‌های شرطی
         if ($plan['is_test_plan']) {
             $keyboard_buttons[] = [['text' => '↔️ تبدیل به پلن عادی', 'callback_data' => "make_plan_normal_{$plan_id}"]];
         }
@@ -622,7 +635,7 @@ function generatePlanList($chat_id) {
     }
 }
 
-function showPlansForCategory($chat_id, $category_id) {
+function showServersForCategory($chat_id, $category_id) {
     $category_stmt = pdo()->prepare("SELECT name FROM categories WHERE id = ?");
     $category_stmt->execute([$category_id]);
     $category_name = $category_stmt->fetchColumn();
@@ -631,20 +644,27 @@ function showPlansForCategory($chat_id, $category_id) {
         return;
     }
 
-    $active_plans = getPlansForCategory($category_id);
-    if (empty($active_plans)) {
-        sendMessage($chat_id, "متاسفانه در حال حاضر هیچ پلنی در این دسته‌بندی موجود نیست.");
+    // کوئری برای پیدا کردن سرورهای فعال که در این دسته‌بندی پلن فعال دارند
+    $stmt = pdo()->prepare("
+        SELECT DISTINCT s.id, s.name 
+        FROM servers s
+        JOIN plans p ON s.id = p.server_id
+        WHERE p.category_id = ? AND p.status = 'active' AND s.status = 'active'
+    ");
+    $stmt->execute([$category_id]);
+    $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($servers)) {
+        sendMessage($chat_id, "متاسفانه در حال حاضر هیچ سروری در این دسته‌بندی پلن فعال ندارد.");
         return;
     }
 
-    $user_balance = getUserData($chat_id)['balance'] ?? 0;
-    $message = "🛍️ <b>پلن‌های دسته‌بندی «{$category_name}»</b>\nموجودی شما: " . number_format($user_balance) . " تومان\n\nلطفا پلن مورد نظر خود را انتخاب کنید:";
+    $message = "🛍️ <b>دسته‌بندی «{$category_name}»</b>\n\nلطفاً سرور (لوکیشن) مورد نظر خود را انتخاب کنید:";
     $keyboard_buttons = [];
-    foreach ($active_plans as $plan) {
-        $button_text = "{$plan['name']} | {$plan['volume_gb']}GB | " . number_format($plan['price']) . " تومان";
-        $keyboard_buttons[] = [['text' => $button_text, 'callback_data' => "buy_plan_{$plan['id']}"]];
+    foreach ($servers as $server) {
+        // فرمت callback جدید: show_plans_cat_{ID}_srv_{ID}
+        $keyboard_buttons[] = [['text' => "🖥 {$server['name']}", 'callback_data' => "show_plans_cat_{$category_id}_srv_{$server['id']}"]];
     }
-    $keyboard_buttons[] = [['text' => '🎁 اعمال کد تخفیف', 'callback_data' => 'apply_discount_code_' . $category_id]];
     $keyboard_buttons[] = [['text' => '◀️ بازگشت به دسته‌بندی‌ها', 'callback_data' => 'back_to_categories']];
     sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
 }
@@ -758,29 +778,31 @@ function handleMainMenu($chat_id, $first_name, $is_start_command = false) {
             }
             if (hasPermission($chat_id, 'manage_payment')) {
                 $rows[3][] = ['text' => '💳 مدیریت پرداخت'];
+                $rows[3][] = ['text' => '💳 مدیریت درگاه پرداخت']; 
             }
             if (hasPermission($chat_id, 'manage_marzban')) {
-                $rows[3][] = ['text' => '🌐 مدیریت مرزبان'];
+                $rows[4][] = ['text' => '🌐 مدیریت سرورها'];
             }
             if (hasPermission($chat_id, 'manage_settings')) {
-                $rows[4][] = ['text' => '⚙️ تنظیمات کلی ربات'];
+                $rows[5][] = ['text' => '⚙️ تنظیمات کلی ربات'];
             }
             if (hasPermission($chat_id, 'manage_guides')) {
-                $rows[4][] = ['text' => '📚 مدیریت راهنما'];
+                $rows[5][] = ['text' => '📚 مدیریت راهنما'];
             }
             if (hasPermission($chat_id, 'manage_notifications')) {
-                $rows[4][] = ['text' => '📢 مدیریت اعلان‌ها'];
+                $rows[5][] = ['text' => '📢 مدیریت اعلان‌ها'];
             }
             if (hasPermission($chat_id, 'manage_test_config')) {
-                $rows[5][] = ['text' => '🧪 مدیریت کانفیگ تست'];
+                $rows[6][] = ['text' => '🧪 مدیریت کانفیگ تست'];
             }
             if ($chat_id == ADMIN_CHAT_ID) {
-                $rows[5][] = ['text' => '👨‍💼 مدیریت ادمین‌ها'];
+                $rows[6][] = ['text' => '👨‍💼 مدیریت ادمین‌ها'];
             }
             if (hasPermission($chat_id, 'manage_verification')) {
-                $rows[6][] = ['text' => '🔐 مدیریت احراز هویت'];
+                $rows[7][] = ['text' => '🔐 مدیریت احراز هویت'];
             }
-            $rows[6][] = ['text' => '🎁 مدیریت کد تخفیف'];
+            $rows[7][] = ['text' => '🎁 مدیریت کد تخفیف'];
+            $rows[8][] = ['text' => '🔄 مدیریت تمدید'];
             foreach ($rows as $row) {
                 if (!empty($row)) {
                     $admin_keyboard[] = $row;
@@ -862,6 +884,282 @@ function showVerificationManagementMenu($chat_id) {
         editMessageText($chat_id, $message_id, $message, $keyboard);
     }
     else {
+        sendMessage($chat_id, $message, $keyboard);
+    }
+}
+
+// =====================================================================
+// ---             توابع انتزاعی برای مدیریت پنل‌ها                   ---
+// =====================================================================
+
+function getPanelUser($username, $server_id) {
+    $stmt = pdo()->prepare("SELECT type FROM servers WHERE id = ?");
+    $stmt->execute([$server_id]);
+    $type = $stmt->fetchColumn();
+
+    switch ($type) {
+        case 'marzban':
+            return getMarzbanUser($username, $server_id);
+        case 'sanaei':
+            return getSanaeiUser($username, $server_id);
+        case 'marzneshin':
+            return getMarzneshinUser($username, $server_id);
+        default:
+            return false;
+    }
+}
+
+function createPanelUser($plan, $chat_id, $plan_id) {
+    $stmt = pdo()->prepare("SELECT type FROM servers WHERE id = ?");
+    $stmt->execute([$plan['server_id']]);
+    $type = $stmt->fetchColumn();
+
+    switch ($type) {
+        case 'marzban':
+            return createMarzbanUser($plan, $chat_id, $plan_id);
+        case 'sanaei':
+            return createSanaeiUser($plan, $chat_id, $plan_id);
+        case 'marzneshin':
+            return createMarzneshinUser($plan, $chat_id, $plan_id);
+        default:
+            return false;
+    }
+}
+
+function deletePanelUser($username, $server_id) {
+    $stmt = pdo()->prepare("SELECT type FROM servers WHERE id = ?");
+    $stmt->execute([$server_id]);
+    $type = $stmt->fetchColumn();
+
+    switch ($type) {
+        case 'marzban':
+            return deleteMarzbanUser($username, $server_id);
+        case 'sanaei':
+            return deleteSanaeiUser($username, $server_id);
+        case 'marzneshin':
+            return deleteMarzneshinUser($username, $server_id);
+        default:
+            return false;
+    }
+}
+
+function modifyPanelUser($username, $server_id, $data) {
+    $stmt = pdo()->prepare("SELECT type FROM servers WHERE id = ?");
+    $stmt->execute([$server_id]);
+    $type = $stmt->fetchColumn();
+
+    switch ($type) {
+        case 'marzban':
+            return modifyMarzbanUser($username, $server_id, $data);
+        case 'sanaei':
+            return modifySanaeiUser($username, $server_id, $data);
+        case 'marzneshin':
+            return modifyMarzneshinUser($username, $server_id, $data);
+        default:
+            return false;
+    }
+}
+
+function showPlanEditor($chat_id, $message_id, $plan_id, $prompt = null)
+{
+    $plan = getPlanById($plan_id);
+    if (!$plan) {
+        editMessageText($chat_id, $message_id, "❌ خطا: پلن مورد نظر یافت نشد.");
+        return;
+    }
+
+    $status_icon = $plan['status'] == 'active' ? '✅' : '❌';
+    $message_text = "<b> ویرایش پلن: {$plan['name']}</b> {$status_icon}\n";
+    $message_text .= "➖➖➖➖➖➖➖➖➖➖\n";
+    $message_text .= "▫️ نام: <code>{$plan['name']}</code>\n";
+    $message_text .= "▫️ قیمت: <code>" . number_format($plan['price']) . "</code> تومان\n";
+    $message_text .= "▫️ حجم: <code>{$plan['volume_gb']}</code> گیگابایت\n";
+    $message_text .= "▫️ مدت: <code>{$plan['duration_days']}</code> روز\n";
+    $message_text .= "▫️ محدودیت خرید: <code>" . ($plan['purchase_limit'] == 0 ? 'نامحدود' : $plan['purchase_limit']) . "</code>\n";
+    $message_text .= "➖➖➖➖➖➖➖➖➖➖";
+
+    if ($prompt) {
+        $message_text .= "\n\n<b>" . $prompt . "</b>";
+    }
+
+    $keyboard = [
+        'inline_keyboard' => [
+            [['text' => '✏️ نام', 'callback_data' => "edit_plan_field_{$plan_id}_name"], ['text' => '💰 قیمت', 'callback_data' => "edit_plan_field_{$plan_id}_price"]],
+            [['text' => '📊 حجم', 'callback_data' => "edit_plan_field_{$plan_id}_volume_gb"], ['text' => '⏰ مدت', 'callback_data' => "edit_plan_field_{$plan_id}_duration_days"]],
+            [['text' => '📈 محدودیت خرید', 'callback_data' => "edit_plan_field_{$plan_id}_purchase_limit"]],
+            [['text' => '◀️ بازگشت به لیست پلن‌ها', 'callback_data' => "back_to_plan_list"]],
+        ],
+    ];
+
+    editMessageText($chat_id, $message_id, $message_text, $keyboard);
+}
+
+function fetchAndParseSubscriptionUrl($sub_url, $server_id) {
+    if (empty($sub_url)) {
+        return [];
+    }
+    
+    $stmt = pdo()->prepare("SELECT url, sub_host FROM servers WHERE id = ?");
+    $stmt->execute([$server_id]);
+    $server_info = $stmt->fetch();
+    if (!$server_info) return [];
+    
+        $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
+    
+    $stmt_type = pdo()->prepare("SELECT type FROM servers WHERE id = ?");
+    $stmt_type->execute([$server_id]);
+    $server_type = $stmt_type->fetchColumn();
+
+    $sub_path = '';
+   
+    if ($server_type === 'marzban' || $server_type === 'sanaei') {
+        $sub_path_raw = strstr($sub_url, '/sub/');
+        if ($sub_path_raw !== false) {
+            $sub_path = $sub_path_raw;
+        }
+    }
+    
+    
+    if (empty($sub_path)) {
+        $sub_path = parse_url($sub_url, PHP_URL_PATH);
+    }
+
+    $full_correct_url = $base_sub_url . $sub_path;
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $full_correct_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_FOLLOWLOCATION => true,
+    ]);
+
+    $response_body = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code !== 200) {
+        error_log("Failed to fetch subscription URL {$full_correct_url}. HTTP Code: {$http_code}");
+        return [];
+    }
+
+    $decoded_links = base64_decode($response_body);
+    if ($decoded_links === false) {
+        $decoded_links = $response_body;
+    }
+    
+    $links_array = preg_split("/\r\n|\n|\r/", trim($decoded_links));
+    
+    return array_filter($links_array);
+}
+
+function showPlansForCategoryAndServer($chat_id, $category_id, $server_id) {
+    // دریافت نام دسته بندی و سرور برای نمایش در پیام
+    $category_name = pdo()->prepare("SELECT name FROM categories WHERE id = ?")->execute([$category_id]) ? pdo()->lastInsertId() : 'نامشخص';
+    $server_name = pdo()->prepare("SELECT name FROM servers WHERE id = ?")->execute([$server_id]) ? pdo()->lastInsertId() : 'نامشخص';
+
+
+    $stmt = pdo()->prepare("SELECT * FROM plans WHERE category_id = ? AND server_id = ? AND status = 'active' AND is_test_plan = 0");
+    $stmt->execute([$category_id, $server_id]);
+    $active_plans = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($active_plans)) {
+        sendMessage($chat_id, "متاسفانه پلن فعالی برای این سرور یافت نشد.");
+        return;
+    }
+
+    $user_balance = getUserData($chat_id)['balance'] ?? 0;
+    $message = "🛍️ <b>پلن‌های سرور «{$server_name}»</b>\nموجودی شما: " . number_format($user_balance) . " تومان\n\nلطفا پلن مورد نظر خود را انتخاب کنید:";
+    $keyboard_buttons = [];
+    foreach ($active_plans as $plan) {
+        $button_text = "{$plan['name']} | {$plan['volume_gb']}GB | " . number_format($plan['price']) . " تومان";
+        $keyboard_buttons[] = [['text' => $button_text, 'callback_data' => "buy_plan_{$plan['id']}"]];
+    }
+    // فرمت callback جدید برای کد تخفیف: apply_discount_code_{cat_ID}_{srv_ID}
+    $keyboard_buttons[] = [['text' => '🎁 اعمال کد تخفیف', 'callback_data' => "apply_discount_code_{$category_id}_{$server_id}"]];
+    // دکمه بازگشت به لیست سرورها برای همان دسته بندی
+    $keyboard_buttons[] = [['text' => '◀️ بازگشت به انتخاب سرور', 'callback_data' => 'cat_' . $category_id]];
+    sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+}
+
+function applyRenewal($chat_id, $username, $days_to_add, $gb_to_add) {
+    $stmt = pdo()->prepare("SELECT server_id FROM services WHERE owner_chat_id = ? AND marzban_username = ?");
+    $stmt->execute([$chat_id, $username]);
+    $server_id = $stmt->fetchColumn();
+
+    if (!$server_id) {
+        return ['success' => false, 'message' => 'سرویس در دیتابیس ربات یافت نشد.'];
+    }
+
+    $current_user_data = getPanelUser($username, $server_id);
+    if (!$current_user_data || isset($current_user_data['detail'])) {
+        return ['success' => false, 'message' => 'اطلاعات سرویس از پنل دریافت نشد.'];
+    }
+
+    $update_data = [];
+
+    // محاسبه زمان جدید
+    if ($days_to_add > 0) {
+        $seconds_to_add = $days_to_add * 86400;
+        $current_expire = $current_user_data['expire'] ?? 0;
+        // اگر سرویس منقضی شده، از زمان حال حساب کن
+        $new_expire = ($current_expire > 0 && $current_expire > time()) ? $current_expire + $seconds_to_add : time() + $seconds_to_add;
+        $update_data['expire'] = $new_expire;
+    }
+
+    // محاسبه حجم جدید
+    if ($gb_to_add > 0) {
+        $bytes_to_add = $gb_to_add * 1024 * 1024 * 1024;
+        $current_limit = $current_user_data['data_limit'] ?? 0;
+        if ($current_limit > 0) { // فقط به سرویس‌های حجم‌دار، حجم اضافه کن
+            $new_limit = $current_limit + $bytes_to_add;
+            $update_data['data_limit'] = $new_limit;
+        }
+    }
+
+    if (empty($update_data)) {
+         return ['success' => false, 'message' => 'هیچ تغییری برای اعمال وجود نداشت.'];
+    }
+
+    $result = modifyPanelUser($username, $server_id, $update_data);
+    
+    // بروزرسانی دیتابیس محلی
+    if ($result && !isset($result['detail'])) {
+        if(isset($update_data['expire'])){
+             pdo()->prepare("UPDATE services SET expire_timestamp = ? WHERE marzban_username = ? AND server_id = ?")->execute([$update_data['expire'], $username, $server_id]);
+        }
+        if(isset($update_data['data_limit'])){
+             $new_volume_gb = ($update_data['data_limit'] / (1024*1024*1024));
+             pdo()->prepare("UPDATE services SET volume_gb = ? WHERE marzban_username = ? AND server_id = ?")->execute([$new_volume_gb, $username, $server_id]);
+        }
+        return ['success' => true];
+    }
+
+    return ['success' => false, 'message' => 'خطا در ارتباط با پنل برای اعمال تغییرات.'];
+}
+
+function showRenewalManagementMenu($chat_id, $message_id = null) {
+    $settings = getSettings();
+    $status_icon = ($settings['renewal_status'] ?? 'off') == 'on' ? '✅' : '❌';
+    $message = "<b>🔄 مدیریت تمدید سرویس</b>\n\n" .
+               "▫️ وضعیت کلی: " . ($status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n" .
+               "▫️ هزینه هر روز تمدید: <b>" . number_format($settings['renewal_price_per_day'] ?? 1000) . " تومان</b>\n" .
+               "▫️ هزینه هر گیگابایت تمدید: <b>" . number_format($settings['renewal_price_per_gb'] ?? 2000) . " تومان</b>";
+
+    $keyboard = [
+        'inline_keyboard' => [
+            [['text' => $status_icon . ' فعال/غیرفعال کردن', 'callback_data' => 'toggle_renewal_status']],
+            [['text' => '💰 تنظیم قیمت روز', 'callback_data' => 'set_renewal_price_day']],
+            [['text' => '📊 تنظیم قیمت حجم', 'callback_data' => 'set_renewal_price_gb']],
+            [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
+        ]
+    ];
+
+    if ($message_id) {
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    } else {
         sendMessage($chat_id, $message, $keyboard);
     }
 }

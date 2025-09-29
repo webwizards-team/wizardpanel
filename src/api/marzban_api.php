@@ -131,7 +131,12 @@ function createMarzbanUser($plan, $chat_id, $plan_id) {
 
     $userData = [
         'username' => $username,
-        'proxies' => ['vless' => new stdClass()],
+        'proxies' => [
+            'vless' => new stdClass(),
+            'vmess' => new stdClass(),
+            'trojan' => new stdClass(),
+            'shadowsocks' => new stdClass() 
+        ],
         'inbounds' => new stdClass(),
         'expire' => time() + $plan['duration_days'] * 86400,
         'data_limit' => $plan['volume_gb'] * 1024 * 1024 * 1024,
@@ -140,19 +145,31 @@ function createMarzbanUser($plan, $chat_id, $plan_id) {
 
     $response = marzbanApiRequest('/api/user', $server_id, 'POST', $userData, $accessToken);
 
-    if (isset($response['username'])) {
+        if (isset($response['username'])) {
         pdo()
             ->prepare("UPDATE services SET warning_sent = 0 WHERE marzban_username = ? AND server_id = ?")
             ->execute([$response['username'], $server_id]);
+
+        
+        $stmt_server = pdo()->prepare("SELECT url, sub_host FROM servers WHERE id = ?");
+        $stmt_server->execute([$server_id]);
+        $server_info = $stmt_server->fetch();
+        
+        $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
+        $sub_path = parse_url($response['subscription_url'], PHP_URL_PATH);
+        $final_sub_url = $base_sub_url . $sub_path;
 
         saveUserService($chat_id, [
             'server_id' => $server_id,
             'username' => $response['username'],
             'plan_id' => $plan_id,
-            'sub_url' => $response['subscription_url'],
+            'sub_url' => $final_sub_url,
             'expire_timestamp' => $userData['expire'],
             'volume_gb' => $plan['volume_gb'],
         ]);
+        
+       
+        $response['subscription_url'] = $final_sub_url; 
         return $response;
     }
 
