@@ -1,13 +1,18 @@
 <?php
 
-// فراخوانی تمام فایل‌های API در ابتدای فایل
+if (!defined('BOT_USERNAME')) {
+    define('BOT_USERNAME', '');
+}
+
 require_once __DIR__ . '/../api/marzban_api.php';
 require_once __DIR__ . '/../api/sanaei_api.php';
 require_once __DIR__ . '/../api/marzneshin_api.php';
+require_once __DIR__ . '/../pay/tetra_api.php';
+require_once __DIR__ . '/../pay/zarinpal_api.php';
 
-// =====================================================================
-// ---                 توابع اصلی API تلگرام                         ---
-// =====================================================================
+
+
+
 
 
 function handleKeyboard($keyboard, $handleMainMenu = false) {
@@ -175,38 +180,80 @@ function apiRequest($method, $params = []) {
     return $response;
 }
 
-// =====================================================================
-// ---           توابع مدیریت داده (بازنویسی شده برای MySQL)         ---
-// =====================================================================
 
-// --- مدیریت کاربران ---
-function getUserData($chat_id, $first_name = 'کاربر') {
-    pdo()
-        ->prepare("UPDATE users SET last_seen_at = CURRENT_TIMESTAMP, reminder_sent = 0 WHERE chat_id = ?")
-        ->execute([$chat_id]);
 
+
+
+
+function getUserData($chat_id, $first_name = 'کاربر', $temp_referrer_id = null) {
+    
     $stmt = pdo()->prepare("SELECT * FROM users WHERE chat_id = ?");
     $stmt->execute([$chat_id]);
     $user = $stmt->fetch();
 
-    if (!$user) {
+    if (!$user) { 
+        error_log("--- New User Detected --- CHAT_ID: {$chat_id}, Referrer_ID: {$temp_referrer_id}"); 
+
         $settings = getSettings();
-        $welcome_gift = (int)($settings['welcome_gift_balance'] ?? 0);
-
-        $stmt = pdo()->prepare("INSERT INTO users (chat_id, first_name, balance, user_state) VALUES (?, ?, ?, 'main_menu')");
-        $stmt->execute([$chat_id, $first_name, $welcome_gift]);
-
-        if ($welcome_gift > 0) {
-            sendMessage($chat_id, "🎁 به عنوان هدیه خوش‌آمدگویی، مبلغ " . number_format($welcome_gift) . " تومان به حساب شما اضافه شد.");
+        $final_referrer_id = null;
+        
+        if ($temp_referrer_id && $settings['referral_status'] === 'on' && $temp_referrer_id != $chat_id) {
+            error_log("Referral system is ON. Checking referrer: {$temp_referrer_id}"); 
+            $stmt_check_referrer = pdo()->prepare("SELECT chat_id FROM users WHERE chat_id = ?");
+            $stmt_check_referrer->execute([$temp_referrer_id]);
+            if ($stmt_check_referrer->fetch()) {
+                $final_referrer_id = $temp_referrer_id;
+                error_log("Referrer FOUND in DB: {$final_referrer_id}"); 
+            } else {
+                error_log("Referrer NOT FOUND in DB."); 
+            }
         }
 
+        
+        $initial_balance = (int)($settings['welcome_gift_balance'] ?? 0);
+        $reward_referred = 0;
+        if ($final_referrer_id) {
+            $reward_referred = (int)($settings['referral_reward_referred'] ?? 0);
+            $initial_balance += $reward_referred;
+        }
+
+        
+        $referral_link = "https://t.me/" . BOT_USERNAME . "?start=" . $chat_id;
+        $stmt_insert = pdo()->prepare("INSERT INTO users (chat_id, first_name, balance, user_state, referrer_id, referral_link) VALUES (?, ?, ?, 'main_menu', ?, ?)");
+        $stmt_insert->execute([$chat_id, $first_name, $initial_balance, $final_referrer_id, $referral_link]);
+        
+        
+        if ($final_referrer_id) {
+            $reward_referrer = (int)($settings['referral_reward_referrer'] ?? 0);
+            if ($reward_referrer > 0) {
+                error_log("Attempting to give referrer ({$final_referrer_id}) a reward of {$reward_referrer}"); 
+                updateUserBalance($final_referrer_id, $reward_referrer, 'add');
+                
+                $message_to_referrer = "🎉 تبریک! یک کاربر جدید از طریق لینک شما عضو شد و مبلغ " . number_format($reward_referrer) . " تومان به عنوان هدیه به موجودی شما اضافه شد.";
+                $send_result = sendMessage($final_referrer_id, $message_to_referrer);
+                error_log("sendMessage result for referrer: " . $send_result); 
+            }
+        }
+        
+        if ($reward_referred > 0) {
+            error_log("Attempting to send message to new user ({$chat_id}) for referral reward of {$reward_referred}"); 
+            $message_to_referred = "🎁 شما از طریق لینک دعوت وارد شدید! مبلغ " . number_format($reward_referred) . " تومان به عنوان هدیه به حساب شما اضافه شد.";
+            sendMessage($chat_id, $message_to_referred);
+        }
+        
+        if ((int)($settings['welcome_gift_balance'] ?? 0) > 0) {
+            error_log("Attempting to send welcome gift message to new user ({$chat_id})"); 
+            $message_welcome = "🎁 به عنوان هدیه خوش‌آمدگویی، مبلغ " . number_format($settings['welcome_gift_balance']) . " تومان به حساب شما اضافه شد.";
+            sendMessage($chat_id, $message_welcome);
+        }
+        
         $stmt = pdo()->prepare("SELECT * FROM users WHERE chat_id = ?");
         $stmt->execute([$chat_id]);
         $user = $stmt->fetch();
     }
 
+    
     $user['state_data'] = json_decode($user['state_data'] ?? '[]', true);
-
     $user['state'] = $user['user_state'];
     return $user;
 }
@@ -250,7 +297,7 @@ function resetAllUsersTestCount() {
     return $stmt->rowCount();
 }
 
-// --- مدیریت ادمین‌ها ---
+
 function getAdmins() {
     $stmt = pdo()->prepare("SELECT * FROM admins WHERE is_super_admin = 0");
     $stmt->execute();
@@ -305,7 +352,7 @@ function hasPermission($chat_id, $permission) {
     return false;
 }
 
-// --- مدیریت تنظیمات ---
+
 function getSettings() {
     $stmt = pdo()->query("SELECT * FROM settings");
     $settings_from_db = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -326,7 +373,12 @@ function getSettings() {
         'notification_inactive_message' => '👋 سلام! مدت زیادی است که به ما سر نزده‌اید. برای مشاهده جدیدترین سرویس‌ها و پیشنهادات وارد ربات شوید.',
         'verification_method' => 'off',
         'verification_iran_only' => 'off',
-        'inline_keyboard' => 'on'
+        'inline_keyboard' => 'on',
+        'custom_config_status' => 'off',
+        'custom_price_per_day' => '1000',
+        'custom_price_per_gb' => '2000',
+        'custom_max_days' => '0',
+        'custom_max_gb' => '0'
     ];
 
     foreach ($defaults as $key => $value) {
@@ -352,7 +404,7 @@ function saveSettings($settings) {
     }
 }
 
-// --- مدیریت دسته‌بندی‌ها، پلن‌ها و سرویس‌ها ---
+
 function getCategories($only_active = false) {
     $sql = "SELECT * FROM categories";
     if ($only_active) {
@@ -409,9 +461,9 @@ function deleteUserService($chat_id, $username, $server_id) {
     return $stmt->execute([$chat_id, $username, $server_id]);
 }
 
-// =====================================================================
-// ---                        توابع کمکی و عمومی                     ---
-// =====================================================================
+
+
+
 
 function getPermissionMap() {
     return [
@@ -428,6 +480,8 @@ function getPermissionMap() {
         'manage_test_config' => '🧪 مدیریت کانفیگ تست',
         'manage_notifications' => '📢 مدیریت اعلان‌ها',
         'manage_verification' => '🔐 مدیریت احراز هویت',
+        'manage_custom_config' => 'تعیین قیمت دلخواه',
+        'manage_referrals' => '🤝 مدیریت زیرمجموعه‌گیری',
     ];
 }
 
@@ -478,9 +532,9 @@ function calculateIncomeStats() {
     return $stats;
 }
 
-// =====================================================================
-// ---                       توابع نمایش منوها                       ---
-// =====================================================================
+
+
+
 
 function generateGuideList($chat_id) {
     $stmt = pdo()->query("SELECT id, button_name, status FROM guides ORDER BY id DESC");
@@ -617,7 +671,7 @@ function generatePlanList($chat_id) {
         }
 
         $keyboard_buttons = [];
-        // --- open_plan_editor ---
+        
         $keyboard_buttons[] = [['text' => "🗑 حذف", 'callback_data' => "delete_plan_{$plan_id}"], ['text' => $status_action, 'callback_data' => "toggle_plan_{$plan_id}"], ['text' => "✏️ ویرایش", 'callback_data' => "open_plan_editor_{$plan_id}"]];
 
         if ($plan['is_test_plan']) {
@@ -644,7 +698,7 @@ function showServersForCategory($chat_id, $category_id) {
         return;
     }
 
-    // کوئری برای پیدا کردن سرورهای فعال که در این دسته‌بندی پلن فعال دارند
+    
     $stmt = pdo()->prepare("
         SELECT DISTINCT s.id, s.name 
         FROM servers s
@@ -666,6 +720,37 @@ function showServersForCategory($chat_id, $category_id) {
         $keyboard_buttons[] = [['text' => "🖥 {$server['name']}", 'callback_data' => "show_plans_cat_{$category_id}_srv_{$server['id']}"]];
     }
     $keyboard_buttons[] = [['text' => '◀️ بازگشت به دسته‌بندی‌ها', 'callback_data' => 'back_to_categories']];
+    sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+}
+
+function showServersForCustomConfigCategory($chat_id, $category_id) {
+    $category_stmt = pdo()->prepare("SELECT name FROM categories WHERE id = ?");
+    $category_stmt->execute([$category_id]);
+    $category_name = $category_stmt->fetchColumn();
+    if (!$category_name) {
+        sendMessage($chat_id, "خطا: دسته‌بندی یافت نشد.");
+        return;
+    }
+
+    
+    $stmt = pdo()->query("
+        SELECT id, name
+        FROM servers
+        WHERE status = 'active'
+    ");
+    $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($servers)) {
+        sendMessage($chat_id, "متاسفانه در حال حاضر هیچ سرور فعالی برای ساخت کانفیگ دلخواه موجود نیست.");
+        return;
+    }
+
+    $message = "🛠️ <b>کانفیگ دلخواه - دسته‌بندی «{$category_name}»</b>\n\nلطفاً سرور (لوکیشن) مورد نظر خود را انتخاب کنید:";
+    $keyboard_buttons = [];
+    foreach ($servers as $server) {
+        $keyboard_buttons[] = [['text' => "🖥 {$server['name']}", 'callback_data' => "select_custom_server_cat_{$category_id}_srv_{$server['id']}"]];
+    }
+    $keyboard_buttons[] = [['text' => '◀️ بازگشت به دسته‌بندی‌ها', 'callback_data' => 'back_to_custom_categories']];
     sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
 }
 
@@ -738,7 +823,7 @@ function handleMainMenu($chat_id, $first_name, $is_start_command = false) {
         $message = "به منوی اصلی بازگشتید. لطفا گزینه مورد نظر را انتخاب کنید.";
     }
 
-    $keyboard_buttons = [[['text' => '🛒 خرید سرویس']], [['text' => '💳 شارژ حساب'], ['text' => '👤 حساب کاربری']], [['text' => '🔧 سرویس‌های من'], ['text' => '📨 پشتیبانی']]];
+    $keyboard_buttons = [[['text' => '🛒 خرید سرویس'], ['text' => '🛠 کانفیگ دلخواه']], [['text' => '💳 شارژ حساب'], ['text' => '👤 حساب کاربری']], [['text' => '🔧 سرویس‌های من'], ['text' => '📨 پشتیبانی']], [['text' => '🤝 زیرمجموعه‌گیری']]];
 
     $test_plan = getTestPlan();
     if ($test_plan) {
@@ -802,7 +887,13 @@ function handleMainMenu($chat_id, $first_name, $is_start_command = false) {
                 $rows[7][] = ['text' => '🔐 مدیریت احراز هویت'];
             }
             $rows[7][] = ['text' => '🎁 مدیریت کد تخفیف'];
-            $rows[8][] = ['text' => '🔄 مدیریت تمدید'];
+            if (hasPermission($chat_id, 'manage_custom_config')) {
+                $rows[8][] = ['text' => 'تعیین قیمت دلخواه'];
+            }
+            if (hasPermission($chat_id, 'manage_referrals')) { 
+                $rows[8][] = ['text' => '🤝 مدیریت زیرمجموعه‌گیری'];
+            }
+            $rows[9][] = ['text' => '🔄 مدیریت تمدید'];
             foreach ($rows as $row) {
                 if (!empty($row)) {
                     $admin_keyboard[] = $row;
@@ -888,9 +979,9 @@ function showVerificationManagementMenu($chat_id) {
     }
 }
 
-// =====================================================================
-// ---             توابع انتزاعی برای مدیریت پنل‌ها                   ---
-// =====================================================================
+
+
+
 
 function getPanelUser($username, $server_id) {
     $stmt = pdo()->prepare("SELECT type FROM servers WHERE id = ?");
@@ -1056,7 +1147,7 @@ function fetchAndParseSubscriptionUrl($sub_url, $server_id) {
 }
 
 function showPlansForCategoryAndServer($chat_id, $category_id, $server_id) {
-    // دریافت نام دسته بندی و سرور برای نمایش در پیام
+    
     $category_name = pdo()->prepare("SELECT name FROM categories WHERE id = ?")->execute([$category_id]) ? pdo()->lastInsertId() : 'نامشخص';
     $server_name = pdo()->prepare("SELECT name FROM servers WHERE id = ?")->execute([$server_id]) ? pdo()->lastInsertId() : 'نامشخص';
 
@@ -1077,9 +1168,9 @@ function showPlansForCategoryAndServer($chat_id, $category_id, $server_id) {
         $button_text = "{$plan['name']} | {$plan['volume_gb']}GB | " . number_format($plan['price']) . " تومان";
         $keyboard_buttons[] = [['text' => $button_text, 'callback_data' => "buy_plan_{$plan['id']}"]];
     }
-    // فرمت callback جدید برای کد تخفیف: apply_discount_code_{cat_ID}_{srv_ID}
+    
     $keyboard_buttons[] = [['text' => '🎁 اعمال کد تخفیف', 'callback_data' => "apply_discount_code_{$category_id}_{$server_id}"]];
-    // دکمه بازگشت به لیست سرورها برای همان دسته بندی
+    
     $keyboard_buttons[] = [['text' => '◀️ بازگشت به انتخاب سرور', 'callback_data' => 'cat_' . $category_id]];
     sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
 }
@@ -1100,20 +1191,20 @@ function applyRenewal($chat_id, $username, $days_to_add, $gb_to_add) {
 
     $update_data = [];
 
-    // محاسبه زمان جدید
+    
     if ($days_to_add > 0) {
         $seconds_to_add = $days_to_add * 86400;
         $current_expire = $current_user_data['expire'] ?? 0;
-        // اگر سرویس منقضی شده، از زمان حال حساب کن
+        
         $new_expire = ($current_expire > 0 && $current_expire > time()) ? $current_expire + $seconds_to_add : time() + $seconds_to_add;
         $update_data['expire'] = $new_expire;
     }
 
-    // محاسبه حجم جدید
+    
     if ($gb_to_add > 0) {
         $bytes_to_add = $gb_to_add * 1024 * 1024 * 1024;
         $current_limit = $current_user_data['data_limit'] ?? 0;
-        if ($current_limit > 0) { // فقط به سرویس‌های حجم‌دار، حجم اضافه کن
+        if ($current_limit > 0) { 
             $new_limit = $current_limit + $bytes_to_add;
             $update_data['data_limit'] = $new_limit;
         }
@@ -1125,7 +1216,7 @@ function applyRenewal($chat_id, $username, $days_to_add, $gb_to_add) {
 
     $result = modifyPanelUser($username, $server_id, $update_data);
     
-    // بروزرسانی دیتابیس محلی
+    
     if ($result && !isset($result['detail'])) {
         if(isset($update_data['expire'])){
              pdo()->prepare("UPDATE services SET expire_timestamp = ? WHERE marzban_username = ? AND server_id = ?")->execute([$update_data['expire'], $username, $server_id]);
@@ -1153,6 +1244,35 @@ function showRenewalManagementMenu($chat_id, $message_id = null) {
             [['text' => $status_icon . ' فعال/غیرفعال کردن', 'callback_data' => 'toggle_renewal_status']],
             [['text' => '💰 تنظیم قیمت روز', 'callback_data' => 'set_renewal_price_day']],
             [['text' => '📊 تنظیم قیمت حجم', 'callback_data' => 'set_renewal_price_gb']],
+            [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
+        ]
+    ];
+
+    if ($message_id) {
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    } else {
+        sendMessage($chat_id, $message, $keyboard);
+    }
+}
+
+function showCustomConfigManagementMenu($chat_id, $message_id = null) {
+    $settings = getSettings();
+    $status_icon = ($settings['custom_config_status'] ?? 'off') == 'on' ? '✅' : '❌';
+    $max_days = (int)($settings['custom_max_days'] ?? 0);
+    $max_gb = (int)($settings['custom_max_gb'] ?? 0);
+
+    $message = "<b>⚙️ تنظیم کانفیگ دلخواه</b>\n\n" .
+               "▫️ وضعیت کلی: " . ($status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n" .
+               "▫️ قیمت هر روز: <b>" . number_format($settings['custom_price_per_day'] ?? 1000) . " تومان</b>\n" .
+               "▫️ قیمت هر گیگابایت: <b>" . number_format($settings['custom_price_per_gb'] ?? 2000) . " تومان</b>\n" .
+               "▫️ حداکثر روز قابل خرید: <b>" . ($max_days == 0 ? 'نامحدود' : "{$max_days} روز") . "</b>\n" .
+               "▫️ حداکثر حجم قابل خرید: <b>" . ($max_gb == 0 ? 'نامحدود' : "{$max_gb} گیگابایت") . "</b>";
+
+    $keyboard = [
+        'inline_keyboard' => [
+            [['text' => $status_icon . ' فعال/غیرفعال کردن', 'callback_data' => 'toggle_custom_config_status']],
+            [['text' => '💰 تنظیم قیمت روز', 'callback_data' => 'set_custom_price_day'], ['text' => '📊 تنظیم قیمت حجم', 'callback_data' => 'set_custom_price_gb']],
+            [['text' => '⏰ تنظیم حداکثر روز', 'callback_data' => 'set_custom_max_days'], ['text' => '📈 تنظیم حداکثر حجم', 'callback_data' => 'set_custom_max_gb']],
             [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
         ]
     ];
@@ -1201,56 +1321,39 @@ function showMarzbanProtocolEditor($chat_id, $message_id, $server_id) {
     editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
 }
 
-function createZarinpalLink($chat_id, $amount, $description, $metadata = []) {
-    $settings = getSettings();
-    $merchant_id = $settings['zarinpal_merchant_id'];
-    $script_url = 'https://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/verify_payment.php';
-    
-    $data = [
-        "merchant_id" => $merchant_id,
-        "amount" => $amount * 10, // تبدیل تومان به ریال
-        "callback_url" => $script_url,
-        "description" => $description,
-        "metadata" => $metadata
-    ];
-    $jsonData = json_encode($data);
-
-    $ch = curl_init('https://api.zarinpal.com/pg/v4/payment/request.json');
-    curl_setopt($ch, CURLOPT_USERAGENT, 'ZarinPal Rest Api v4');
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json', 'Content-Length: ' . strlen($jsonData)]);
-    
-    $result = curl_exec($ch);
-    curl_close($ch);
-    $result = json_decode($result, true);
-    
-    if (empty($result['errors'])) {
-        $authority = $result['data']['authority'];
-        
-        // ثبت تراکنش در دیتابیس
-        $stmt = pdo()->prepare("INSERT INTO transactions (user_id, amount, authority, description, metadata) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$chat_id, $amount, $authority, $description, json_encode($metadata)]);
-        
-        $payment_url = 'https://www.zarinpal.com/pg/StartPay/' . $authority;
-        return ['success' => true, 'url' => $payment_url];
-    } else {
-        $error_code = $result['errors']['code'];
-        return ['success' => false, 'error' => "❌ خطا در اتصال به درگاه پرداخت. کد خطا: {$error_code}"];
-    }
-}
-
 function completePurchase($user_id, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied) {
     $plan = getPlanById($plan_id);
     $user_data = getUserData($user_id);
     $first_name = $user_data['first_name'];
 
-    // ساخت نام کاربری کامل و یکتا برای پنل
+    
+    $settings = getSettings();
+    $referrer_id = $user_data['referrer_id'] ?? null;
+    $should_give_commission = false;
+    $commission_rate = 0;
+
+    if ($referrer_id && $settings['referral_commission_status'] === 'on' && $final_price > 0 && $plan['is_test_plan'] != 1) {
+        $stmt_check_purchase = pdo()->prepare("SELECT COUNT(*) FROM services WHERE owner_chat_id = ?");
+        $stmt_check_purchase->execute([$user_id]);
+        $purchase_count = $stmt_check_purchase->fetchColumn();
+        
+        
+        $is_first_purchase = ($purchase_count == 0);
+
+        if ($settings['referral_commission_first_only'] === 'off' || ($settings['referral_commission_first_only'] === 'on' && $is_first_purchase)) {
+            $commission_rate = (float)($settings['referral_commission_rate'] ?? 0);
+            if ($commission_rate > 0) {
+                $should_give_commission = true;
+            }
+        }
+    }
+    
+
+    
     $plan['full_username'] = preg_replace('/[^a-zA-Z0-9_.]/', '', $custom_name) . '_user' . $user_id . '_' . time();
 
-
     $panel_user_data = createPanelUser($plan, $user_id, $plan_id);
+    
     if ($panel_user_data && isset($panel_user_data['username'])) {
         if ($plan['is_test_plan'] == 1) {
             pdo()->prepare("UPDATE users SET test_config_count = test_config_count + 1 WHERE chat_id = ?")->execute([$user_id]);
@@ -1277,6 +1380,18 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
             'expire_timestamp' => $expire_timestamp,
             'volume_gb' => $plan['volume_gb'],
         ]);
+
+        
+        if ($should_give_commission) {
+            $commission_amount = ($final_price * $commission_rate) / 100;
+            updateUserBalance($referrer_id, $commission_amount, 'add');
+            
+            pdo()->prepare("INSERT INTO referral_logs (referrer_id, referred_id, commission_amount, purchase_amount) VALUES (?, ?, ?, ?)")
+                ->execute([$referrer_id, $user_id, $commission_amount, $final_price]);
+
+            sendMessage($referrer_id, "💰 یکی از زیرمجموعه‌های شما خریدی به مبلغ " . number_format($final_price) . " تومان انجام داد و مبلغ " . number_format($commission_amount) . " تومان به عنوان کمیسیون به موجودی شما اضافه شد.");
+        }
+        
         
         $new_balance = $user_data['balance'] - $final_price;
         $sub_link = $panel_user_data['subscription_url'];
@@ -1295,9 +1410,6 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
         
         $caption .= "💰 موجودی جدید شما: " . number_format($new_balance) . " تومان";
 
-        $chat_info_response = apiRequest('getChat', ['chat_id' => $user_id]);
-        $chat_info = json_decode($chat_info_response, true);
-        
         $profile_link_html = "👤 کاربر: " . htmlspecialchars($first_name) . " (<code>$user_id</code>)\n";
 
         $admin_notification = "✅ <b>خرید جدید</b>\n\n";
@@ -1331,4 +1443,173 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
         'success' => false,
         'error_message' => "❌ متاسفانه در ایجاد سرویس شما مشکلی پیش آمد. لطفا با پشتیبانی تماس بگیرید. مبلغی از حساب شما کسر نشده است."
     ];
+}
+
+function completeCustomPurchase($user_id, $temp_plan, $custom_name, $final_price) {
+    $user_data = getUserData($user_id);
+    $first_name = $user_data['first_name'];
+
+    
+    $temp_plan['full_username'] = preg_replace('/[^a-zA-Z0-9_.]/', '', $custom_name) . '_custom' . $user_id . '_' . time();
+
+    
+    $panel_user_data = createPanelUser($temp_plan, $user_id, $temp_plan['id']);
+    
+    if ($panel_user_data && isset($panel_user_data['username'])) {
+        
+        
+        
+        updateUserBalance($user_id, $final_price, 'deduct');
+
+        $expire_timestamp = $panel_user_data['expire'] ?? (isset($panel_user_data['expire_date']) ? strtotime($panel_user_data['expire_date']) : (time() + $temp_plan['duration_days'] * 86400));
+        
+        saveUserService($user_id, [
+            'server_id' => $temp_plan['server_id'],
+            'username' => $panel_user_data['username'],
+            'custom_name' => $custom_name,
+            'plan_id' => $temp_plan['id'], 
+            'sub_url' => $panel_user_data['subscription_url'],
+            'expire_timestamp' => $expire_timestamp,
+            'volume_gb' => $temp_plan['volume_gb'],
+        ]);
+        
+        $new_balance = $user_data['balance'] - $final_price;
+        $sub_link = $panel_user_data['subscription_url'];
+        $qr_code_url = generateQrCodeUrl($sub_link);
+
+        $caption = "✅ <b>کانفیگ دلخواه شما با موفقیت ایجاد شد.</b>\n";
+        $caption .= "\n▫️ نام سرویس: <b>" . htmlspecialchars($custom_name) . "</b>\n\n";
+
+        if ($temp_plan['show_sub_link']) {
+            $caption .= "🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($sub_link) . "</code>\n\n";
+        }
+        
+        $caption .= "💰 موجودی جدید شما: " . number_format($new_balance) . " تومان";
+
+        $chat_info_response = apiRequest('getChat', ['chat_id' => $user_id]);
+        $chat_info = json_decode($chat_info_response, true);
+        
+        $profile_link_html = "👤 کاربر: " . htmlspecialchars($first_name) . " (<code>$user_id</code>)\n";
+
+        $admin_notification = "✅ <b>خرید کانفیگ دلخواه جدید</b>\n\n";
+        $admin_notification .= $profile_link_html;
+        $admin_notification .= "💬 نام سرویس: " . htmlspecialchars($custom_name) . "\n";
+        $admin_notification .= "📊 حجم: {$temp_plan['volume_gb']} GB | ⏰ مدت: {$temp_plan['duration_days']} روز\n";
+        $admin_notification .= "💳 مبلغ پرداخت شده: <b>" . number_format($final_price) . " تومان</b>";
+        
+        $keyboard_buttons = [];
+        if ($temp_plan['show_conf_links'] && !empty($panel_user_data['links'])) {
+            $keyboard_buttons[] = [['text' => '📋 دریافت کانفیگ‌ها', 'callback_data' => "get_configs_{$panel_user_data['username']}"]];
+        }
+
+        return [
+            'success' => true,
+            'caption' => $caption,
+            'qr_code_url' => $qr_code_url,
+            'keyboard' => ['inline_keyboard' => $keyboard_buttons],
+            'admin_notification' => $admin_notification,
+        ];
+    }
+    
+    return [
+        'success' => false,
+        'error_message' => "❌ متاسفانه در ایجاد سرویس شما مشکلی پیش آمد. لطفا با پشتیبانی تماس بگیرید. مبلغی از حساب شما کسر نشده است."
+    ];
+}
+
+function handleCustomConfigStart($chat_id) {
+    $settings = getSettings();
+    if (($settings['custom_config_status'] ?? 'off') !== 'on') {
+        sendMessage($chat_id, "❌ قابلیت کانفیگ دلخواه در حال حاضر توسط مدیر غیرفعال شده است.");
+        return;
+    }
+    
+    $categories = getCategories(true);
+    if (empty($categories)) {
+        sendMessage($chat_id, "متاسفانه در حال حاضر هیچ دسته‌بندی فعالی برای کانفیگ دلخواه موجود نیست.");
+        return;
+    }
+    
+    $keyboard_buttons = [];
+    foreach ($categories as $category) {
+        $keyboard_buttons[] = [['text' => '🛍 ' . $category['name'], 'callback_data' => 'custom_cat_' . $category['id']]];
+    }
+    
+    sendMessage($chat_id, "لطفا دسته‌بندی مورد نظر برای کانفیگ دلخواه خود را انتخاب کنید:", ['inline_keyboard' => $keyboard_buttons]);
+}
+
+function showReferralMenu($chat_id) {
+    $settings = getSettings();
+    if (($settings['referral_status'] ?? 'off') !== 'on') {
+        sendMessage($chat_id, "❌ سیستم زیرمجموعه‌گیری در حال حاضر غیرفعال است.");
+        return;
+    }
+    
+    $user = getUserData($chat_id);
+    $referral_link = $user['referral_link'] ?? "https://t.me/" . BOT_USERNAME . "?start=" . $chat_id;
+
+    $stmt_sub_count = pdo()->prepare("SELECT COUNT(*) FROM users WHERE referrer_id = ?");
+    $stmt_sub_count->execute([$chat_id]);
+    $sub_count = $stmt_sub_count->fetchColumn() ?: 0;
+    
+    $stmt_commission = pdo()->prepare("SELECT SUM(commission_amount) FROM referral_logs WHERE referrer_id = ?");
+    $stmt_commission->execute([$chat_id]);
+    $commission_total = $stmt_commission->fetchColumn() ?: 0;
+
+    $message = "<b>🤝 سیستم زیرمجموعه‌گیری</b>\n\n";
+    $message .= "با دعوت دوستان خود به ربات، هم شما و هم دوستانتان هدیه بگیرید و از خریدهایشان کسب درآمد کنید!\n\n";
+    $message .= "🔗 <b>لینک دعوت اختصاصی شما:</b>\n<code>" . $referral_link . "</code>\n\n";
+    $message .= "<b>آمار شما:</b>\n";
+    $message .= "▫️ تعداد زیرمجموعه‌ها: <b>" . number_format($sub_count) . " نفر</b>\n";
+    $message .= "▫️ کل درآمد شما از کمیسیون: <b>" . number_format($commission_total) . " تومان</b>\n\n";
+    
+    $reward_referrer = (int)($settings['referral_reward_referrer'] ?? 0);
+    $reward_referred = (int)($settings['referral_reward_referred'] ?? 0);
+    $commission_rate = (float)($settings['referral_commission_rate'] ?? 0);
+
+    $message .= "<b>🎁 جوایز فعلی:</b>\n";
+    $message .= "▫️ هدیه به شما (به ازای هر عضویت): " . number_format($reward_referrer) . " تومان\n";
+    $message .= "▫️ هدیه به دوست شما (پس از عضویت): " . number_format($reward_referred) . " تومان\n";
+    if ($settings['referral_commission_status'] === 'on' && $commission_rate > 0) {
+        $commission_type = ($settings['referral_commission_first_only'] === 'on') ? "فقط از اولین خرید" : "از تمام خریدها";
+        $message .= "▫️ کمیسیون خرید: <b>" . $commission_rate . "%</b> (" . $commission_type . ")";
+    }
+
+    sendMessage($chat_id, $message);
+}
+
+function showReferralManagementMenu($chat_id, $message_id = null) {
+    $settings = getSettings();
+    $status_icon = ($settings['referral_status'] ?? 'off') == 'on' ? '✅' : '❌';
+    $commission_status_icon = ($settings['referral_commission_status'] ?? 'off') == 'on' ? '✅' : '❌';
+    $commission_type_icon = ($settings['referral_commission_first_only'] ?? 'on') == 'on' ? '1️⃣' : '♾️';
+    $commission_type_text = ($settings['referral_commission_first_only'] ?? 'on') == 'on' ? 'فقط خرید اول' : 'تمام خریدها';
+
+    $message = "<b>🤝 مدیریت سیستم زیرمجموعه‌گیری</b>\n\n";
+    $message .= "<b>بخش پاداش ثبت‌نام:</b>\n";
+    $message .= "▫️ وضعیت کلی: " . ($status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n";
+    $message .= "▫️ هدیه به معرف: <b>" . number_format($settings['referral_reward_referrer'] ?? 0) . " تومان</b>\n";
+    $message .= "▫️ هدیه به کاربر جدید: <b>" . number_format($settings['referral_reward_referred'] ?? 0) . " تومان</b>\n\n";
+
+    $message .= "<b>بخش کمیسیون خرید:</b>\n";
+    $message .= "▫️ وضعیت کمیسیون: " . ($commission_status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n";
+    $message .= "▫️ درصد کمیسیون: <b>" . ($settings['referral_commission_rate'] ?? 5) . "%</b>\n";
+    $message .= "▫️ نوع کمیسیون: <b>" . $commission_type_text . "</b>";
+
+    $keyboard = [
+        'inline_keyboard' => [
+            [['text' => $status_icon . ' فعال/غیرفعال کردن کل سیستم', 'callback_data' => 'toggle_referral_status']],
+            [['text' => '💰 تنظیم هدیه معرف', 'callback_data' => 'set_referrer_reward'], ['text' => '🎁 تنظیم هدیه کاربر جدید', 'callback_data' => 'set_referred_reward']],
+            [['text' => $commission_status_icon . ' فعال/غیرفعال کردن کمیسیون', 'callback_data' => 'toggle_commission_status']],
+            [['text' => '📊 تنظیم درصد کمیسیون', 'callback_data' => 'set_commission_rate']],
+            [['text' => $commission_type_icon . ' تغییر نوع کمیسیون', 'callback_data' => 'toggle_commission_first_only']],
+            [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
+        ]
+    ];
+
+    if ($message_id) {
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    } else {
+        sendMessage($chat_id, $message, $keyboard);
+    }
 }

@@ -1,210 +1,34 @@
-<?php
+﻿<?php
+
+
 
 function marzbanApiRequest($endpoint, $server_id, $method = 'GET', $data = [], $accessToken = null) {
-    $stmt = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
-    $stmt->execute([$server_id]);
-    $server_info = $stmt->fetch();
-
-    if (!$server_info) {
-        error_log("Marzban server with ID {$server_id} not found.");
-        return ['error' => 'Marzban server is not configured.'];
-    }
-
-    $url = rtrim($server_info['url'], '/') . $endpoint;
-
-    $headers = ['Content-Type: application/json', 'Accept: application/json'];
-    if ($accessToken) {
-        $headers[] = 'Authorization: Bearer ' . $accessToken;
-    }
-
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_TIMEOUT => 15,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false,
-    ]);
-
-    switch ($method) {
-        case 'POST':
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-            break;
-        case 'PUT':
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-            break;
-        case 'DELETE':
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
-            break;
-    }
-
-    $response = curl_exec($ch);
-    if (curl_errno($ch)) {
-        error_log("Marzban API cURL error for server {$server_id}: " . curl_error($ch));
-        curl_close($ch);
-        return false;
-    }
-    curl_close($ch);
-
-    return json_decode($response, true);
+    
+    return false;
 }
 
 function getMarzbanToken($server_id) {
-    $stmt = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
-    $stmt->execute([$server_id]);
-    $server_info = $stmt->fetch();
-
-    if (!$server_info) {
-        error_log("Marzban credentials are not configured for server ID {$server_id}.");
-        return false;
-    }
-
-    $cache_key = 'marzban_token_' . $server_id;
-    $current_time = time();
-
-    $stmt_cache = pdo()->prepare("SELECT cache_value FROM cache WHERE cache_key = ? AND expire_at > ?");
-    $stmt_cache->execute([$cache_key, $current_time]);
-    $cached_token = $stmt_cache->fetchColumn();
-    if ($cached_token) {
-        return $cached_token;
-    }
-
-    $url = rtrim($server_info['url'], '/') . '/api/admin/token';
-    $postData = http_build_query([
-        'username' => $server_info['username'],
-        'password' => $server_info['password'],
-    ]);
-
-    $headers = ['Content-Type: application/x-www-form-urlencoded', 'Accept: application/json'];
-
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $postData,
-        CURLOPT_TIMEOUT => 10,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false,
-    ]);
-
-    $response_body = curl_exec($ch);
-
-    if (curl_errno($ch)) {
-        error_log("Marzban Token cURL error for server {$server_id}: " . curl_error($ch));
-        curl_close($ch);
-        return false;
-    }
-    curl_close($ch);
-
-    $response = json_decode($response_body, true);
-
-    if (isset($response['access_token'])) {
-        $new_token = $response['access_token'];
-        $expire_time = $current_time + 3500;
-
-        $stmt_insert_cache = pdo()->prepare(
-            "INSERT INTO cache (cache_key, cache_value, expire_at) VALUES (?, ?, ?) 
-             ON DUPLICATE KEY UPDATE cache_value = VALUES(cache_value), expire_at = VALUES(expire_at)"
-        );
-        $stmt_insert_cache->execute([$cache_key, $new_token, $expire_time]);
-
-        return $new_token;
-    }
-
-    error_log("Failed to get Marzban access token for server {$server_id}. Response: " . $response_body);
+    
     return false;
 }
 
 function createMarzbanUser($plan, $chat_id, $plan_id) {
-    $server_id = $plan['server_id'];
-    $accessToken = getMarzbanToken($server_id);
-    if (!$accessToken) {
-        return false;
-    }
-
-    $stmt_server_protocols = pdo()->prepare("SELECT marzban_protocols FROM servers WHERE id = ?");
-    $stmt_server_protocols->execute([$server_id]);
-    $protocols_json = $stmt_server_protocols->fetchColumn();
     
-    $proxies = new stdClass(); 
     
-    if ($protocols_json) {
-        $protocol_list = json_decode($protocols_json, true);
-        if (is_array($protocol_list) && !empty($protocol_list)) {
-            foreach ($protocol_list as $protocol) {
-                $proxies->{$protocol} = new stdClass();
-            }
-        }
-    }
-    
-    if (empty((array)$proxies)) {
-         $proxies->vless = new stdClass();
-    }
-   
-    $username = $plan['full_username'];
-
-    $userData = [
-        'username' => $username,
-        'proxies' => $proxies, 
-        'inbounds' => new stdClass(),
-        'expire' => time() + $plan['duration_days'] * 86400,
-        'data_limit' => $plan['volume_gb'] * 1024 * 1024 * 1024,
-        'data_limit_reset_strategy' => 'no_reset',
-    ];
-
-    $response = marzbanApiRequest('/api/user', $server_id, 'POST', $userData, $accessToken);
-
-    if (isset($response['username'])) {
-        pdo()
-            ->prepare("UPDATE services SET warning_sent = 0 WHERE marzban_username = ? AND server_id = ?")
-            ->execute([$response['username'], $server_id]);
-
-        
-        $stmt_server = pdo()->prepare("SELECT url, sub_host FROM servers WHERE id = ?");
-        $stmt_server->execute([$server_id]);
-        $server_info = $stmt_server->fetch();
-        
-        $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
-        $sub_path = parse_url($response['subscription_url'], PHP_URL_PATH);
-        $final_sub_url = $base_sub_url . $sub_path;
-        
-       
-        $response['subscription_url'] = $final_sub_url; 
-        return $response;
-    }
-
-    error_log("Failed to create Marzban user for chat_id {$chat_id} on server {$server_id}. Response: " . json_encode($response));
     return false;
 }
 
 function getMarzbanUser($username, $server_id) {
-    $accessToken = getMarzbanToken($server_id);
-    if (!$accessToken) {
-        return false;
-    }
-
-    return marzbanApiRequest("/api/user/{$username}", $server_id, 'GET', [], $accessToken);
+    
+    return false;
 }
 
 function modifyMarzbanUser($username, $server_id, $data) {
-    $accessToken = getMarzbanToken($server_id);
-    if (!$accessToken) {
-        return false;
-    }
-
-    return marzbanApiRequest("/api/user/{$username}", $server_id, 'PUT', $data, $accessToken);
+    
+    return false;
 }
 
 function deleteMarzbanUser($username, $server_id) {
-    $accessToken = getMarzbanToken($server_id);
-    if (!$accessToken) {
-        return false;
-    }
-
-    return marzbanApiRequest("/api/user/{$username}", $server_id, 'DELETE', [], $accessToken);
+    
+    return false;
 }

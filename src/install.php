@@ -1,5 +1,5 @@
 <?php
-// --- بخش حذف خودکار ---
+
 if (isset($_GET['action']) && $_GET['action'] === 'self_delete') {
     if (file_exists(__FILE__) && is_writable(__FILE__)) {
         unlink(__FILE__);
@@ -7,11 +7,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'self_delete') {
     exit();
 }
 
-// برای جلوگیری از نمایش خطاها به کاربر نهایی در محیط عملیاتی
 error_reporting(0);
 ini_set('display_errors', 0);
 
-// --- متغیرهای اولیه ---
 $configFile = __DIR__ . '/includes/config.php';
 $botFileUrl = 'https://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/bot.php';
 
@@ -19,9 +17,38 @@ $step = isset($_POST['step']) ? (int)$_POST['step'] : 1;
 $errors = [];
 $successMessages = [];
 
-// --- داده‌های فرم ---
 $bot_token = trim($_POST['bot_token'] ?? '');
 $admin_id = trim($_POST['admin_id'] ?? '');
+$master_user = trim($_POST['master_user'] ?? 'master');
+$master_pass = trim($_POST['master_pass'] ?? '123456');
+
+function sendTelegramRequest(string $url): ?string {
+    if (function_exists('curl_init')) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        $response = curl_exec($ch);
+        curl_close($ch);
+        if ($response !== false) {
+            return $response;
+        }
+    }
+    // Fallback to file_get_contents
+    $opts = [
+        "http" => [
+            "timeout" => 10,
+            "ignore_errors" => true
+        ],
+        "ssl" => [
+            "verify_peer" => false,
+            "verify_peer_name" => false,
+        ]
+    ];
+    return @file_get_contents($url, false, stream_context_create($opts));
+}
 
 function generateRandomString(int $length = 32): string {
     return bin2hex(random_bytes($length / 2));
@@ -29,7 +56,24 @@ function generateRandomString(int $length = 32): string {
 
 function getDbBaseSchemaSQL(): string {
     return "
-    CREATE TABLE IF NOT EXISTS `users` ( `chat_id` BIGINT NOT NULL, `first_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci, `balance` DECIMAL(10,2) NOT NULL DEFAULT 0.00, `user_state` VARCHAR(255) DEFAULT 'main_menu', `state_data` TEXT, `status` VARCHAR(20) NOT NULL DEFAULT 'active', `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`chat_id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `users` (
+    `chat_id` BIGINT NOT NULL,
+    `first_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci,
+    `balance` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `user_state` VARCHAR(255) DEFAULT 'main_menu',
+    `state_data` TEXT,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'active',
+    `test_config_count` INT NOT NULL DEFAULT 0,
+    `is_verified` TINYINT(1) NOT NULL DEFAULT 0,
+    `phone_number` VARCHAR(20) NULL DEFAULT NULL,
+    `referrer_id` BIGINT NULL DEFAULT NULL,
+    `referral_link` VARCHAR(255) NULL DEFAULT NULL,
+    `last_seen_at` TIMESTAMP NULL DEFAULT NULL,
+    `reminder_sent` TINYINT(1) NOT NULL DEFAULT 0,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `inline_keyboard` TINYINT(1) NOT NULL DEFAULT 0,
+    PRIMARY KEY (`chat_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `admins` ( `chat_id` BIGINT NOT NULL PRIMARY KEY, `first_name` VARCHAR(255), `permissions` TEXT, `is_super_admin` TINYINT(1) NOT NULL DEFAULT 0 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `categories` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `servers` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL, `url` VARCHAR(255) NOT NULL, `username` VARCHAR(255) NOT NULL, `password` VARCHAR(255) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -57,6 +101,7 @@ function getDbBaseSchemaSQL(): string {
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) NOT NULL,
   `amount` decimal(10,2) NOT NULL,
+  `gateway` varchar(20) NOT NULL DEFAULT 'zarinpal',
   `authority` varchar(50) NOT NULL,
   `ref_id` varchar(50) DEFAULT NULL,
   `description` varchar(255) DEFAULT NULL,
@@ -67,6 +112,47 @@ function getDbBaseSchemaSQL(): string {
   PRIMARY KEY (`id`),
   UNIQUE KEY `authority` (`authority`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `referral_logs` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `referrer_id` bigint(20) NOT NULL,
+  `referred_id` bigint(20) NOT NULL,
+  `commission_amount` decimal(10,2) NOT NULL,
+  `purchase_amount` decimal(10,2) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    CREATE TABLE IF NOT EXISTS `panels` (
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
+        `name` VARCHAR(100) NOT NULL,
+        `url` VARCHAR(255) NOT NULL,
+        `username` VARCHAR(100) NOT NULL,
+        `password` VARCHAR(255) NOT NULL,
+        `sub_domain` VARCHAR(255) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    CREATE TABLE IF NOT EXISTS `resellers` (
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
+        `username` VARCHAR(50) UNIQUE NOT NULL,
+        `password` VARCHAR(255) NOT NULL,
+        `name` VARCHAR(100) NOT NULL,
+        `panel_id` INT NOT NULL,
+        `inbound_id` INT NOT NULL,
+        `max_clients` INT NOT NULL DEFAULT 0,
+        `traffic_limit` DOUBLE NOT NULL DEFAULT 0,
+        `historical_traffic` BIGINT NOT NULL DEFAULT 0,
+        `status` VARCHAR(20) DEFAULT 'active'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    CREATE TABLE IF NOT EXISTS `daily_stats` (
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
+        `admin_id` INT NOT NULL,
+        `stat_date` DATE NOT NULL,
+        `sales_count` INT NOT NULL DEFAULT 0,
+        `traffic_used` BIGINT NOT NULL DEFAULT 0,
+        `cumulative_traffic` BIGINT NOT NULL DEFAULT 0,
+        UNIQUE KEY `admin_date` (`admin_id`, `stat_date`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ";
 }
 
@@ -88,7 +174,6 @@ function runDbUpgrades(PDO $pdo): array {
         $messages[] = "✅ ستون `state` در جدول `users` به `user_state` تغییر نام یافت.";
     }
 
-    // --- ارتقا برای پشتیبانی از چند پنل ---
     if (!columnExists($pdo, 'servers', 'type')) {
         $pdo->exec("ALTER TABLE `servers` ADD `type` VARCHAR(20) NOT NULL DEFAULT 'marzban' AFTER `password`;");
         $messages[] = "✅ ستون `type` برای پشتیبانی از چند نوع پنل به جدول `servers` اضافه شد.";
@@ -110,7 +195,6 @@ function runDbUpgrades(PDO $pdo): array {
         $messages[] = "✅ ستون `sanaei_uuid` برای پنل سنایی به جدول `services` اضافه شد.";
     }
     
-    // --- ارتقاهای مربوط به اعلان‌ها و ردیابی کاربران ---
     if (!columnExists($pdo, 'users', 'last_seen_at')) {
         $pdo->exec("ALTER TABLE `users` ADD `last_seen_at` TIMESTAMP NULL DEFAULT NULL AFTER `status`;");
         $messages[] = "✅ ستون `last_seen_at` برای ردیابی آخرین فعالیت کاربران اضافه شد.";
@@ -167,14 +251,27 @@ function runDbUpgrades(PDO $pdo): array {
         $pdo->exec("ALTER TABLE `services` ADD `custom_name` VARCHAR(255) NULL DEFAULT NULL AFTER `marzban_username`;");
         $messages[] = "✅ ستون `custom_name` برای نام دلخواه سرویس به جدول `services` اضافه شد.";
     }
+    if (!columnExists($pdo, 'transactions', 'gateway')) {
+        $pdo->exec("ALTER TABLE `transactions` ADD `gateway` VARCHAR(20) NOT NULL DEFAULT 'zarinpal' AFTER `amount`;");
+        $messages[] = "✅ ستون `gateway` برای پشتیبانی از چند درگاه پرداخت به جدول `transactions` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'users', 'referrer_id')) {
+    $pdo->exec("ALTER TABLE `users` ADD `referrer_id` BIGINT NULL DEFAULT NULL AFTER `phone_number`;");
+    $messages[] = "✅ ستون `referrer_id` برای سیستم زیرمجموعه‌گیری به جدول `users` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'users', 'referral_link')) {
+        $pdo->exec("ALTER TABLE `users` ADD `referral_link` VARCHAR(255) NULL DEFAULT NULL AFTER `referrer_id`;");
+        $messages[] = "✅ ستون `referral_link` برای لینک دعوت به جدول `users` اضافه شد.";
+    }
 
     return $messages;
 }
 
-// --- مدیریت منطق مراحل ---
 if ($step === 2) {
     if (empty($bot_token)) $errors[] = 'توکن ربات الزامی است.';
     if (empty($admin_id) || !is_numeric($admin_id)) $errors[] = 'آیدی عددی ادمین الزامی و باید عدد باشد.';
+    if (empty($master_user)) $errors[] = 'نام کاربری مدیر کل پنل وب الزامی است.';
+    if (empty($master_pass)) $errors[] = 'رمز عبور مدیر کل پنل وب الزامی است.';
     if (!empty($errors)) $step = 1;
 }
 elseif ($step === 3) {
@@ -205,14 +302,23 @@ elseif ($step === 3) {
             $successMessages[] = "✅ ساختار پایه جداول با موفقیت ایجاد/بررسی شد.";
             
             $secretToken = generateRandomString(64);
+            
+            $getMeUrl = "https://api.telegram.org/bot$bot_token/getMe";
+            $getMeResponse = sendTelegramRequest($getMeUrl);
+            $getMeData = json_decode($getMeResponse, true);
+            $botUsername = ($getMeData && $getMeData['ok']) ? $getMeData['result']['username'] : '';
+
             $config_content = '<?php' . PHP_EOL . PHP_EOL;
             $config_content .= "define('DB_HOST', '{$db_host}');" . PHP_EOL;
             $config_content .= "define('DB_NAME', '{$db_name}');" . PHP_EOL;
             $config_content .= "define('DB_USER', '{$db_user}');" . PHP_EOL;
             $config_content .= "define('DB_PASS', '{$db_pass}');" . PHP_EOL . PHP_EOL;
+            $config_content .= "define('BOT_USERNAME', '{$botUsername}');" . PHP_EOL;
             $config_content .= "define('BOT_TOKEN', '{$bot_token}');" . PHP_EOL;
             $config_content .= "define('ADMIN_CHAT_ID', {$admin_id});" . PHP_EOL;
             $config_content .= "define('SECRET_TOKEN', '{$secretToken}');" . PHP_EOL;
+            $config_content .= "define('RESELLER_ADMIN_USER', '{$master_user}');" . PHP_EOL;
+            $config_content .= "define('RESELLER_ADMIN_PASS', '{$master_pass}');" . PHP_EOL;
             file_put_contents($configFile, $config_content);
             $successMessages[] = "✅ فایل کانفیگ با موفقیت ایجاد شد.";
             
@@ -229,15 +335,24 @@ elseif ($step === 3) {
                 ('verification_iran_only', 'off'), ('test_config_usage_limit', '1'), ('notification_expire_status', 'off'),
                 ('notification_expire_days', '3'), ('notification_expire_gb', '1'), ('notification_inactive_status', 'off'),
                 ('notification_inactive_days', '30'),
-                ('renewal_status', 'off'), ('renewal_price_per_day', '1000'), ('renewal_price_per_gb', '2000'), ('payment_gateway_status', 'off'), ('zarinpal_merchant_id', '');");
+                ('renewal_status', 'off'), ('renewal_price_per_day', '1000'), ('renewal_price_per_gb', '2000'), 
+                ('payment_gateway_status', 'off'), ('zarinpal_merchant_id', ''),
+                ('tetra_status', 'off'), ('tetra_api_key', ''), ('referral_status', 'off'),
+                ('referral_reward_referrer', '0'),
+                ('referral_reward_referred', '0'),
+                ('referral_commission_status', 'off'),
+                ('referral_commission_rate', '5'),
+                ('referral_commission_first_only', 'on')");
             $successMessages[] = "✅ تنظیمات پیش‌فرض با موفقیت افزوده شد.";
             
             $apiUrl = "https://api.telegram.org/bot$bot_token/setWebhook?secret_token=$secretToken&url=" . urlencode($botFileUrl);
-            $response = @file_get_contents($apiUrl);
+            $response = sendTelegramRequest($apiUrl);
             $response_data = json_decode($response, true);
             
             if (!$response || !$response_data['ok']) {
-                $errors[] = 'خطا در ثبت وبهوک: ' . ($response_data['description'] ?? 'پاسخ نامعتبر از تلگرام. از صحت توکن مطمئن شوید.');
+                $webhook_desc = ($response_data && isset($response_data['description'])) ? $response_data['description'] : 'عدم امکان ارتباط سرور با تلگرام (احتمالاً به دلیل فیلترینگ یا عدم فعال بودن SSL/cURL)';
+                $successMessages[] = "⚠️ هشدار: ثبت وبهوک تلگرام با خطا مواجه شد ({$webhook_desc}). اما ساختار دیتابیس و فایل کانفیگ با موفقیت نصب شده‌اند. می‌توانید بعداً از طریق سورس یا پنل وبهوک را تنظیم کنید.";
+                $successMessages[] = "🎉 نصب/ارتقا با موفقیت به پایان رسید!";
             } else {
                 $successMessages[] = "✅ وبهوک با موفقیت در تلگرام ثبت شد.";
                 $successMessages[] = "🎉 نصب/ارتقا با موفقیت به پایان رسید!";
@@ -258,11 +373,19 @@ elseif ($step === 3) {
     <link href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css" rel="stylesheet" type="text/css">
     <style>
         :root {
-            --bg-main: #0a0e1a; --bg-container: #1e293b; --bg-input: #111827;
-            --primary: #8b5cf6; --primary-hover: #7c3aed; --active: #2dd4bf;
-            --success: #10b981; --danger: #ef4444; --warning: #f59e0b;
-            --text-light: #f8fafc; --text-muted: #94a3b8;
-            --border-color: rgba(148, 163, 184, 0.2); --shadow-color: rgba(0, 0, 0, 0.5);
+            --bg-main: #0f172a;
+            --bg-container: #1e293b;
+            --bg-input: #0f172a;
+            --active: #2dd4bf;
+            --primary: #8b5cf6;
+            --primary-hover: #7c3aed;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --text-light: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: rgba(148, 163, 184, 0.2);
+            --shadow-color: rgba(0, 0, 0, 0.5);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: Vazirmatn, sans-serif; }
         body {
@@ -321,9 +444,9 @@ elseif ($step === 3) {
         .alert { padding: 15px; border-radius: 8px; margin-bottom: 20px; border-right-width: 4px; border-right-style: solid; }
         .alert ul { list-style-type: none; padding: 0; margin-top: 10px; }
         .alert li { margin-bottom: 5px; font-size: 0.9rem;}
-        .alert-success { background-color: rgba(16, 185, 129, 0.1); border-right-color: var(--success); color: #a7f3d0; }
-        .alert-danger { background-color: rgba(239, 68, 68, 0.1); border-right-color: var(--danger); color: #fca5a5; }
-        .alert-warning { background-color: rgba(245, 158, 11, 0.1); border-right-color: var(--warning); color: #fcd34d; }
+        .alert-success { background-color: rgba(16, 185, 129, 0.1); border-right-color: var(--success); color: #10b981; }
+        .alert-danger { background-color: rgba(239, 68, 68, 0.1); border-right-color: var(--danger); color: #ef4444; }
+        .alert-warning { background-color: rgba(245, 158, 11, 0.1); border-right-color: var(--warning); color: #f59e0b; }
     </style>
 </head>
 <body>
@@ -334,7 +457,6 @@ elseif ($step === 3) {
     </div>
     
     <div class="content">
-        <!-- Progress Bar -->
         <div class="progress-steps">
             <div class="progress-line progress-line-bg"></div>
             <?php
@@ -359,7 +481,7 @@ elseif ($step === 3) {
             </div>
         </div>
 
-        <?php if (!empty($errors) && $step !== 3): // Show errors on step 1 & 2 if they exist ?>
+        <?php if (!empty($errors) && $step !== 3): ?>
             <div class="alert alert-danger">
                 <strong>خطا!</strong>
                 <ul><?php foreach ($errors as $error) echo "<li>- " . htmlspecialchars($error) . "</li>"; ?></ul>
@@ -385,6 +507,16 @@ elseif ($step === 3) {
                         <input type="text" id="admin_id" name="admin_id" value="<?php echo htmlspecialchars($admin_id); ?>" required>
                         <p class="example-text">مثال: 123456789</p>
                     </div>
+                    <div class="form-group">
+                        <label for="master_user">نام کاربری مدیر کل پنل وب (نمایندگی)</label>
+                        <input type="text" id="master_user" name="master_user" value="<?php echo htmlspecialchars($master_user); ?>" required>
+                        <p class="example-text">مثال: admin</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="master_pass">رمز عبور مدیر کل پنل وب (نمایندگی)</label>
+                        <input type="text" id="master_pass" name="master_pass" value="<?php echo htmlspecialchars($master_pass); ?>" required>
+                        <p class="example-text">مثال: 123456</p>
+                    </div>
                     <button type="submit" class="btn">ادامه به مرحله بعد</button>
                 </form>
             </div>
@@ -395,6 +527,8 @@ elseif ($step === 3) {
                     <input type="hidden" name="step" value="3">
                     <input type="hidden" name="bot_token" value="<?php echo htmlspecialchars($bot_token); ?>">
                     <input type="hidden" name="admin_id" value="<?php echo htmlspecialchars($admin_id); ?>">
+                    <input type="hidden" name="master_user" value="<?php echo htmlspecialchars($master_user); ?>">
+                    <input type="hidden" name="master_pass" value="<?php echo htmlspecialchars($master_pass); ?>">
                     <div class="form-group">
                         <label for="db_host">هاست دیتابیس</label>
                         <input type="text" id="db_host" name="db_host" value="localhost">
@@ -424,7 +558,7 @@ elseif ($step === 3) {
                     <div class="alert alert-warning">
                         <strong>مهم:</strong> این فایل جهت افزایش امنیت تا چند ثانیه دیگر <strong>به صورت خودکار حذف خواهد شد</strong>.
                     </div>
-                <?php else: // This block will show if there were errors in step 3 ?>
+                <?php else: ?>
                     <div class="alert alert-danger">
                         <strong>نصب با خطا مواجه شد!</strong>
                         <ul><?php foreach ($errors as $error) echo "<li>- " . htmlspecialchars($error) . "</li>"; ?></ul>
@@ -447,7 +581,7 @@ elseif ($step === 3) {
                     </div>`;
             })
             .catch(function(error) { console.error('خطا در حذف خودکار فایل:', error); });
-    }, 5000); // 5-second delay
+    }, 5000); 
 </script>
 <?php endif; ?>
 

@@ -1,92 +1,147 @@
-<?php
+﻿<?php
 
-// --- توابع پایه  ---
+
+
 
 function getSanaeiCookie($server_id) {
     $cache_key = 'sanaei_cookie_' . $server_id;
+    $current_time = time();
+
+    
     $stmt_cache = pdo()->prepare("SELECT cache_value FROM cache WHERE cache_key = ? AND expire_at > ?");
-    $stmt_cache->execute([$cache_key, time()]);
+    $stmt_cache->execute([$cache_key, $current_time]);
     if ($cached_cookie = $stmt_cache->fetchColumn()) {
         return $cached_cookie;
     }
 
+    
     $stmt = pdo()->prepare("SELECT url, username, password FROM servers WHERE id = ?");
     $stmt->execute([$server_id]);
     $server_info = $stmt->fetch();
-    if (!$server_info) return false;
+    if (!$server_info) {
+        error_log("Sanaei server credentials not found for ID: {$server_id}");
+        return false;
+    }
 
     $url = rtrim($server_info['url'], '/') . '/login';
-    $postData = ['username' => $server_info['username'], 'password' => $server_info['password']];
+    $postData = [
+        'username' => $server_info['username'],
+        'password' => $server_info['password']
+    ];
 
     $ch = curl_init();
     curl_setopt_array($ch, [
-        CURLOPT_URL => $url, CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => http_build_query($postData), CURLOPT_HEADER => true,
-        CURLOPT_TIMEOUT => 10, CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query($postData),
+        CURLOPT_HEADER => true,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
     ]);
 
     $response = curl_exec($ch);
+    if (curl_errno($ch)) {
+        error_log("Sanaei login cURL error: " . curl_error($ch));
+        curl_close($ch);
+        return false;
+    }
     curl_close($ch);
 
+    
     preg_match('/^Set-Cookie:\s*([^;]*)/mi', $response, $matches);
     if (isset($matches[1])) {
         $cookie = $matches[1];
-        $expire_time = time() + 3500;
-        $stmt_insert_cache = pdo()->prepare("INSERT INTO cache (cache_key, cache_value, expire_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE cache_value = VALUES(cache_value), expire_at = VALUES(expire_at)");
+        $expire_time = $current_time + 3500; 
+        
+        $stmt_insert_cache = pdo()->prepare(
+            "INSERT INTO cache (cache_key, cache_value, expire_at) VALUES (?, ?, ?) 
+             ON DUPLICATE KEY UPDATE cache_value = VALUES(cache_value), expire_at = VALUES(expire_at)"
+        );
         $stmt_insert_cache->execute([$cache_key, $cookie, $expire_time]);
         return $cookie;
     }
+    
+    error_log("Failed to retrieve cookie from Sanaei response: " . $response);
     return false;
 }
+
 
 function sanaeiApiRequest($endpoint, $server_id, $method = 'GET', $data = []) {
     $stmt = pdo()->prepare("SELECT url FROM servers WHERE id = ?");
     $stmt->execute([$server_id]);
     $server_url = $stmt->fetchColumn();
-    if (!$server_url) return ['success' => false, 'msg' => 'Sanaei server is not configured.'];
+    if (!$server_url) {
+        return ['success' => false, 'msg' => 'Sanaei server is not configured.'];
+    }
 
     $cookie = getSanaeiCookie($server_id);
-    if (!$cookie) return ['success' => false, 'msg' => 'Login failed'];
+    if (!$cookie) {
+        return ['success' => false, 'msg' => 'Login to Sanaei panel failed.'];
+    }
 
     $url = rtrim($server_url, '/') . $endpoint;
-    $headers = ['Cookie: ' . $cookie, 'Accept: application/json'];
-    if ($method === 'POST') $headers[] = 'Content-Type: application/json';
+    $headers = [
+        'Cookie: ' . $cookie,
+        'Accept: application/json'
+    ];
+    if ($method === 'POST') {
+        $headers[] = 'Content-Type: application/json';
+    }
 
     $ch = curl_init();
     curl_setopt_array($ch, [
-        CURLOPT_URL => $url, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_TIMEOUT => 10, CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
     ]);
 
     if ($method === 'POST') {
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
     }
+    
     $response = curl_exec($ch);
+    if (curl_errno($ch)) {
+        error_log("Sanaei API cURL error on endpoint {$endpoint}: " . curl_error($ch));
+        curl_close($ch);
+        return ['success' => false, 'msg' => 'Connection to server failed.'];
+    }
     curl_close($ch);
+    
     return json_decode($response, true);
 }
 
 
 function getSanaeiInbounds($server_id) {
     $response = sanaeiApiRequest('/panel/api/inbounds/list', $server_id);
-    return ($response['success'] && isset($response['obj'])) ? $response['obj'] : [];
+    return ($response && isset($response['success']) && $response['success'] && isset($response['obj'])) ? $response['obj'] : [];
 }
+
 
 function _findSanaeiClientInAllInbounds($email_username, $server_id) {
     $inbounds = getSanaeiInbounds($server_id);
-    if (empty($inbounds)) return false;
+    if (empty($inbounds)) {
+        return false;
+    }
 
     foreach ($inbounds as $inbound_summary) {
         $inbound_id = $inbound_summary['id'];
         $response = sanaeiApiRequest("/panel/api/inbounds/get/{$inbound_id}", $server_id);
         
-        if ($response && $response['success'] && isset($response['obj']['settings'])) {
+        if ($response && isset($response['success']) && $response['success'] && isset($response['obj']['settings'])) {
             $settings = json_decode($response['obj']['settings'], true);
             if (isset($settings['clients'])) {
                 foreach ($settings['clients'] as $client) {
                     if (isset($client['email']) && $client['email'] === $email_username) {
-                        return ['client' => $client, 'inbound_id' => $inbound_id];
+                        return [
+                            'client' => $client,
+                            'inbound_id' => $inbound_id
+                        ];
                     }
                 }
             }
@@ -95,6 +150,7 @@ function _findSanaeiClientInAllInbounds($email_username, $server_id) {
     return false;
 }
 
+
 function createSanaeiUser($plan, $chat_id, $plan_id) {
     $server_id = $plan['server_id'];
     $inbound_id = $plan['inbound_id'];
@@ -102,33 +158,61 @@ function createSanaeiUser($plan, $chat_id, $plan_id) {
     $stmt_server = pdo()->prepare("SELECT url, sub_host FROM servers WHERE id = ?");
     $stmt_server->execute([$server_id]);
     $server_info = $stmt_server->fetch();
-    if(!$server_info) return false;
+    if (!$server_info) {
+        return false;
+    }
 
     $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
     $uuid = generateUUID();
     $email = $plan['full_username'];
     $subId = generateUUID(16);
+    
+    
     $expire_time = ($plan['duration_days'] > 0) ? (time() + $plan['duration_days'] * 86400) * 1000 : 0;
+    
+    
     $total_bytes = ($plan['volume_gb'] > 0) ? $plan['volume_gb'] * 1024 * 1024 * 1024 : 0;
-    $client_settings = [ "id" => $uuid, "email" => $email, "totalGB" => $total_bytes, "expiryTime" => $expire_time, "enable" => true, "tgId" => (string)$chat_id, "subId" => $subId ];
-    $data = ['id' => (int)$inbound_id, 'settings' => json_encode(['clients' => [$client_settings]])];
+    
+    $client_settings = [
+        "id" => $uuid,
+        "email" => $email,
+        "totalGB" => $total_bytes,
+        "expiryTime" => $expire_time,
+        "enable" => true,
+        "tgId" => (string)$chat_id,
+        "subId" => $subId,
+        "limitIp" => 0,
+        "reset" => 0
+    ];
+    
+    $data = [
+        'id' => (int)$inbound_id,
+        'settings' => json_encode(['clients' => [$client_settings]])
+    ];
+    
     $response = sanaeiApiRequest('/panel/api/inbounds/addClient', $server_id, 'POST', $data);
 
     if (isset($response['success']) && $response['success']) {
         $sub_link = $base_sub_url . '/sub/' . $subId;
-        // اصلاحیه: پاس دادن server_id به تابع کمکی
+        
+        
         $links = fetchAndParseSubscriptionUrl($sub_link, $server_id);
         
-        return ['username' => $email, 'subscription_url' => $sub_link, 'links' => $links];
+        return [
+            'username' => $email,
+            'subscription_url' => $sub_link,
+            'links' => $links
+        ];
     }
     
     error_log("Failed to create Sanaei user. Response: " . json_encode($response));
     return false;
 }
 
+
 function getSanaeiUser($username, $server_id) {
     $traffic_response = sanaeiApiRequest("/panel/api/inbounds/getClientTraffics/{$username}", $server_id);
-    if (!$traffic_response || !$traffic_response['success'] || !isset($traffic_response['obj'])) {
+    if (!$traffic_response || !isset($traffic_response['success']) || !$traffic_response['success'] || !isset($traffic_response['obj'])) {
         error_log("Could not fetch user traffic for {$username}.");
         return false;
     }
@@ -138,52 +222,80 @@ function getSanaeiUser($username, $server_id) {
     $stmt_service->execute([$username, $server_id]);
     $sub_url = $stmt_service->fetchColumn();
 
-    // اصلاحیه: پاس دادن server_id به تابع کمکی
-    $links = fetchAndParseSubscriptionUrl($sub_url, $server_id);
+    $links = [];
+    if ($sub_url) {
+        $links = fetchAndParseSubscriptionUrl($sub_url, $server_id);
+    }
+    
+    $enable_status = isset($client_traffic_data['enable']) ? $client_traffic_data['enable'] : true;
+    $expiry_time_ms = isset($client_traffic_data['expiryTime']) ? $client_traffic_data['expiryTime'] : 0;
+    
+    $is_active = $enable_status && ($expiry_time_ms == 0 || $expiry_time_ms > time() * 1000);
     
     return [
-        'status' => ($client_traffic_data['enable'] && ($client_traffic_data['expiryTime'] == 0 || $client_traffic_data['expiryTime'] > time() * 1000)) ? 'active' : 'disabled',
-        'expire' => $client_traffic_data['expiryTime'] > 0 ? floor($client_traffic_data['expiryTime'] / 1000) : 0,
-        'used_traffic' => $client_traffic_data['up'] + $client_traffic_data['down'],
-        'data_limit' => $client_traffic_data['totalGB'] ?? 0,
+        'status' => $is_active ? 'active' : 'disabled',
+        'expire' => $expiry_time_ms > 0 ? floor($expiry_time_ms / 1000) : 0,
+        'used_traffic' => (isset($client_traffic_data['up']) ? $client_traffic_data['up'] : 0) + (isset($client_traffic_data['down']) ? $client_traffic_data['down'] : 0),
+        'data_limit' => isset($client_traffic_data['totalGB']) ? $client_traffic_data['totalGB'] : 0,
         'links' => $links,
     ];
 }
 
+
 function modifySanaeiUser($username, $server_id, $data) {
     $foundClientData = _findSanaeiClientInAllInbounds($username, $server_id);
-    if (!$foundClientData) return false;
+    if (!$foundClientData) {
+        error_log("Sanaei user {$username} not found for modification.");
+        return false;
+    }
 
     $inbound_id = $foundClientData['inbound_id'];
     $uuid = $foundClientData['client']['id'];
     
     $traffic_response = sanaeiApiRequest("/panel/api/inbounds/getClientTraffics/{$username}", $server_id);
-    if (!$traffic_response || !$traffic_response['success'] || !isset($traffic_response['obj'])) return false;
+    if (!$traffic_response || !isset($traffic_response['success']) || !$traffic_response['success'] || !isset($traffic_response['obj'])) {
+        return false;
+    }
     $currentClientData = $traffic_response['obj'];
+
+    
+    $totalGB = isset($data['data_limit']) ? $data['data_limit'] : (isset($currentClientData['totalGB']) ? $currentClientData['totalGB'] : 0);
+    
+    
+    $expiryTime = isset($data['expire']) ? $data['expire'] * 1000 : (isset($currentClientData['expiryTime']) ? $currentClientData['expiryTime'] : 0);
 
     $update_payload = [
         'id' => (int)$inbound_id,
         'settings' => json_encode(['clients' => [[
-            'id' => $uuid, 'email' => $username, 'enable' => true,
-            'totalGB' => $data['data_limit'] ?? ($currentClientData['totalGB'] ?? 0),
-            'expiryTime' => isset($data['expire']) ? $data['expire'] * 1000 : ($currentClientData['expiryTime'] ?? 0),
+            'id' => $uuid,
+            'email' => $username,
+            'enable' => true,
+            'totalGB' => $totalGB,
+            'expiryTime' => $expiryTime,
+            'limitIp' => isset($foundClientData['client']['limitIp']) ? $foundClientData['client']['limitIp'] : 0,
+            'tgId' => isset($foundClientData['client']['tgId']) ? $foundClientData['client']['tgId'] : "",
+            'subId' => isset($foundClientData['client']['subId']) ? $foundClientData['client']['subId'] : ""
         ]]])
     ];
     
     $response = sanaeiApiRequest("/panel/api/inbounds/updateClient/{$uuid}", $server_id, 'POST', $update_payload);
-    return $response && $response['success'];
+    return $response && isset($response['success']) && $response['success'];
 }
+
 
 function deleteSanaeiUser($username, $server_id) {
     $foundClientData = _findSanaeiClientInAllInbounds($username, $server_id);
-    if (!$foundClientData) return true;
+    if (!$foundClientData) {
+        return true; 
+    }
 
     $inbound_id = $foundClientData['inbound_id'];
     $uuid = $foundClientData['client']['id'];
 
     $response = sanaeiApiRequest("/panel/api/inbounds/{$inbound_id}/delClient/{$uuid}", $server_id, 'POST');
-    return $response && $response['success'];
+    return $response && isset($response['success']) && $response['success'];
 }
+
 
 function generateUUID($length = 36) {
     if ($length === 36) {

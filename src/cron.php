@@ -1,18 +1,17 @@
-<?php
+﻿<?php
 
 if (php_sapi_name() !== 'cli') {
     die("This script can only be run from the command line.");
 }
 
-// --- فراخوانی فایل‌های مورد نیاز ---
+
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/functions.php';
-require_once __DIR__ . '/includes/marzban_api.php';
 
 echo "Cron job started at " . date('Y-m-d H:i:s') . "\n";
 
-// --- تابع بررسی هشدارهای انقضا ---
+
 function checkExpirationWarnings()
 {
     $settings = getSettings();
@@ -46,9 +45,10 @@ function checkExpirationWarnings()
             continue;
         }
 
-        $user_info = getMarzbanUser($service['marzban_username'], $service['server_id']);
-        if (!$user_info || isset($user_info['detail'])) {
-            echo "   - Could not fetch Marzban info for user {$service['marzban_username']} on server {$service['server_id']}. Skipping.\n";
+        
+        $user_info = getPanelUser($service['marzban_username'], $service['server_id']);
+        if (!$user_info || isset($user_info['detail'])) { 
+            echo "   - Could not fetch panel info for user {$service['marzban_username']} on server {$service['server_id']}. Skipping.\n";
             continue;
         }
 
@@ -82,7 +82,7 @@ function checkExpirationWarnings()
     echo "   - Total expiration warnings sent: {$sent_count}\n";
 }
 
-// --- تابع بررسی کاربران غیرفعال ---
+
 function checkInactiveUsers()
 {
     $settings = getSettings();
@@ -115,12 +115,12 @@ function checkInactiveUsers()
             ->execute([$chat_id]);
         echo "   - Inactivity reminder sent to user {$chat_id}\n";
         $sent_count++;
-        usleep(200000);
+        usleep(200000); 
     }
     echo "   - Total inactivity reminders sent: {$sent_count}\n";
 }
 
-// --- اجرای توابع ---
+
 try {
     checkExpirationWarnings();
     checkInactiveUsers();

@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 if (function_exists('fastcgi_finish_request')) {
     fastcgi_finish_request();
@@ -7,7 +7,7 @@ elseif (function_exists('litespeed_finish_request')) {
     litespeed_finish_request();
 }
 
-// --- فراخوانی فایل‌های مورد نیاز ---
+
 require_once __DIR__ . '/includes/config.php';
 
 if (($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '') !== SECRET_TOKEN) {
@@ -17,9 +17,13 @@ if (($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '') !== SECRET_TOKEN) {
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/functions.php';
 
-// ---------------------------------------------------------------------
-// ---                     شروع منطق اصلی ربات                         ---
-// ---------------------------------------------------------------------
+
+$settings = getSettings();
+define('USER_INLINE_KEYBOARD', ($settings['inline_keyboard'] ?? 'on') === 'on');
+
+
+
+
 
 $apiRequest = false;
 $oneTimeEdit = true;
@@ -29,31 +33,39 @@ if (!$update) {
     die;
 }
 
-// --- آماده‌سازی متغیرهای اولیه ---
-$isAnAdmin = false;
+
 $chat_id = null;
-$user_data = null;
-$user_state = 'none';
 $first_name = 'کاربر';
+$text = '';
+$temp_referrer_id = null;
+
+if (isset($update['message']['text'])) {
+    $text = trim($update['message']['text']);
+    if (strpos($text, '/start ') === 0) {
+        $ref_code = trim(str_replace('/start ', '', $text));
+        if (is_numeric($ref_code)) {
+            $temp_referrer_id = $ref_code;
+        }
+        $text = '/start';
+    }
+}
 
 if (isset($update['callback_query'])) {
     $chat_id = $update['callback_query']['message']['chat']['id'];
     $first_name = $update['callback_query']['from']['first_name'];
-}
-elseif (isset($update['message']['chat']['id'])) {
+} elseif (isset($update['message']['chat']['id'])) {
     $chat_id = $update['message']['chat']['id'];
     $first_name = $update['message']['from']['first_name'];
 }
 
 if ($chat_id) {
+    $user_data = getUserData($chat_id, $first_name, $temp_referrer_id); 
+    
     $isAnAdmin = isUserAdmin($chat_id);
-    $user_data = getUserData($chat_id, $first_name);
     $user_state = $user_data['state'] ?? 'none';
-    $settings = getSettings();
-
-    define('USER_INLINE_KEYBOARD', $settings['inline_keyboard'] === 'on');
-
-    // --- بررسی‌های اولیه (وضعیت ربات، مسدود بودن، عضویت در کانال) ---
+    
+    
+    
     if ($settings['bot_status'] === 'off' && !$isAnAdmin) {
         sendMessage($chat_id, "🛠 ربات در حال حاضر در دست تعمیر است. لطفا بعدا مراجعه کنید.");
         die;
@@ -75,9 +87,9 @@ if ($chat_id) {
 
 $cancelKeyboard = ['keyboard' => [[['text' => '◀️ بازگشت به منوی اصلی']]], 'resize_keyboard' => true];
 
-// ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
-// ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ پردازش CALLBACK QUERY ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
-// ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
+
+
+
 if (isset($update['callback_query'])) {
     $callback_id = $update['callback_query']['id'];
     $data = $update['callback_query']['data'];
@@ -123,7 +135,7 @@ if (isset($update['callback_query'])) {
         die;
     }
     
-    // --- مدیریت پرداخت مستقیم برای خرید پلن ---
+    
     if (strpos($data, 'charge_for_plan_') === 0) {
     $parts = explode('_', $data);
     $amount_to_charge = (int)$parts[3];
@@ -131,13 +143,15 @@ if (isset($update['callback_query'])) {
     $discount_code_to_use = (isset($parts[5]) && !empty($parts[5])) ? $parts[5] : null;
     $custom_name_encoded = $parts[6] ?? '';
     $custom_name = base64_decode($custom_name_encoded);
+    $is_custom_config = (isset($parts[7]) && $parts[7] === 'custom');
 
-    $description = "تکمیل خرید پلن #{$plan_id_to_buy}";
+    $description = $is_custom_config ? "تکمیل خرید کانفیگ دلخواه" : "تکمیل خرید پلن #{$plan_id_to_buy}";
     $metadata = [
         "purpose" => "complete_purchase",
         "plan_id" => $plan_id_to_buy,
         "user_id" => $chat_id,
-        "custom_name" => $custom_name // ذخیره نام دلخواه
+        "custom_name" => $custom_name, 
+        "is_custom_config" => $is_custom_config
     ];
     if ($discount_code_to_use) {
         $metadata["discount_code"] = $discount_code_to_use;
@@ -153,6 +167,70 @@ if (isset($update['callback_query'])) {
     }
     die;
 }
+
+elseif (strpos($data, 'tetra_pay_for_plan_') === 0) {
+        $parts = explode('_', $data);
+        $amount_to_charge = (int)$parts[4];
+        $plan_id_to_buy = (int)$parts[5];
+        $discount_code_to_use = (isset($parts[6]) && !empty($parts[6])) ? $parts[6] : null;
+        $custom_name_encoded = $parts[7] ?? '';
+        $custom_name = base64_decode($custom_name_encoded);
+
+        $description = "تکمیل خرید پلن #{$plan_id_to_buy}";
+        $metadata = [
+            "purpose" => "complete_purchase",
+            "plan_id" => $plan_id_to_buy,
+            "user_id" => $chat_id,
+            "custom_name" => $custom_name,
+        ];
+        if ($discount_code_to_use) {
+            $metadata["discount_code"] = $discount_code_to_use;
+        }
+
+        $tetra_result = createTetraLink($chat_id, $amount_to_charge, $description, $metadata);
+        if ($tetra_result['success']) {
+            $message = "⏳ در حال انتقال به درگاه پرداخت تترا... لطفا صبر کنید.";
+            $keyboard = ['inline_keyboard' => [[['text' => '🚀 ورود به صفحه پرداخت', 'url' => $tetra_result['url']]]]];
+            editMessageText($chat_id, $message_id, $message, $keyboard);
+        } else {
+            editMessageText($chat_id, $message_id, $tetra_result['error']);
+        }
+        die;
+    }
+    
+elseif ($data === 'toggle_referral_status' && hasPermission($chat_id, 'manage_referrals')) {
+    $settings = getSettings();
+    $settings['referral_status'] = ($settings['referral_status'] ?? 'off') == 'on' ? 'off' : 'on';
+    saveSettings($settings);
+    apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
+    showReferralManagementMenu($chat_id, $message_id);
+}
+elseif ($data === 'set_referrer_reward' && hasPermission($chat_id, 'manage_referrals')) {
+    updateUserData($chat_id, 'admin_awaiting_referrer_reward');
+    editMessageText($chat_id, $message_id, "لطفا مبلغ هدیه به **معرف** (کسی که دعوت می‌کند) را به تومان وارد کنید (0 برای غیرفعال کردن):");
+}
+elseif ($data === 'set_referred_reward' && hasPermission($chat_id, 'manage_referrals')) {
+    updateUserData($chat_id, 'admin_awaiting_referred_reward');
+    editMessageText($chat_id, $message_id, "لطفا مبلغ هدیه به **کاربر جدید** (دعوت شده) را به تومان وارد کنید (0 برای غیرفعال کردن):");
+}
+elseif ($data === 'toggle_commission_status' && hasPermission($chat_id, 'manage_referrals')) {
+    $settings = getSettings();
+    $settings['referral_commission_status'] = ($settings['referral_commission_status'] ?? 'off') == 'on' ? 'off' : 'on';
+    saveSettings($settings);
+    apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
+    showReferralManagementMenu($chat_id, $message_id);
+}
+elseif ($data === 'set_commission_rate' && hasPermission($chat_id, 'manage_referrals')) {
+    updateUserData($chat_id, 'admin_awaiting_commission_rate');
+    editMessageText($chat_id, $message_id, "لطفا درصد کمیسیون از خرید زیرمجموعه را وارد کنید (فقط عدد بین 0 تا 100):");
+}
+elseif ($data === 'toggle_commission_first_only' && hasPermission($chat_id, 'manage_referrals')) {
+    $settings = getSettings();
+    $settings['referral_commission_first_only'] = ($settings['referral_commission_first_only'] ?? 'on') == 'on' ? 'off' : 'on';
+    saveSettings($settings);
+    apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
+    showReferralManagementMenu($chat_id, $message_id);
+}
     elseif (strpos($data, 'manual_pay_for_plan_') === 0) {
     $parts = explode('_', $data);
     $amount_to_charge = (int)$parts[4];
@@ -160,12 +238,14 @@ if (isset($update['callback_query'])) {
     $discount_code_to_use = (isset($parts[6]) && !empty($parts[6])) ? $parts[6] : null;
     $custom_name_encoded = $parts[7] ?? '';
     $custom_name = base64_decode($custom_name_encoded);
+    $is_custom_config = (isset($parts[8]) && $parts[8] === 'custom');
 
     $state_data = [
         'charge_amount' => $amount_to_charge,
         'purpose' => 'complete_purchase',
         'plan_id' => $plan_id_to_buy,
-        'custom_name' => $custom_name, // ذخیره نام دلخواه در state
+        'custom_name' => $custom_name, 
+        'is_custom_config' => $is_custom_config
     ];
     if ($discount_code_to_use) {
         $state_data['discount_code'] = $discount_code_to_use;
@@ -184,9 +264,107 @@ if (isset($update['callback_query'])) {
     die;
 }
 
-    // --- دکمه‌های مخصوص ادمین‌ها ---
+    
     if ($isAnAdmin) {
-        // --- بخش جدید: مدیریت کاربران از طریق دکمه شیشه‌ای ---
+        
+    if (strpos($data, 'custom_cat_') === 0) {
+        $categoryId = str_replace('custom_cat_', '', $data);
+        showServersForCustomConfigCategory($chat_id, $categoryId);
+        deleteMessage($chat_id, $message_id);
+        die;
+    }
+    elseif ($data === 'manage_gateway_zarinpal') {
+        $settings = getSettings();
+        $status_icon = ($settings['payment_gateway_status'] ?? 'off') == 'on' ? '✅' : '❌';
+        $merchant_id = $settings['zarinpal_merchant_id'] ?? '<i>تنظیم نشده</i>';
+        
+        $message = "<b>🔵 مدیریت درگاه پرداخت زرین‌پال</b>\n\n" .
+                   "▫️ وضعیت کلی: " . ($status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n" .
+                   "▫️ مرچنت کد: <code>{$merchant_id}</code>";
+
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => $status_icon . ' فعال/غیرفعال کردن', 'callback_data' => 'toggle_gateway_status']],
+                [['text' => '✏️ تنظیم مرچنت کد', 'callback_data' => 'set_zarinpal_merchant_id']],
+                [['text' => '◀️ بازگشت به انتخاب درگاه', 'callback_data' => 'back_to_gateway_menu']],
+            ]
+        ];
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    }
+    elseif ($data === 'manage_gateway_tetra') {
+        $settings = getSettings();
+        $status_icon = ($settings['tetra_status'] ?? 'off') == 'on' ? '✅' : '❌';
+        $api_key = $settings['tetra_api_key'] ?? '<i>تنظیم نشده</i>';
+        
+        $message = "<b>🟣 مدیریت درگاه پرداخت تترا 98</b>\n\n" .
+                   "▫️ وضعیت کلی: " . ($status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n" .
+                   "▫️ کلید API: <code>{$api_key}</code>";
+
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => $status_icon . ' فعال/غیرفعال کردن', 'callback_data' => 'toggle_tetra_status']],
+                [['text' => '✏️ تنظیم ApiKey', 'callback_data' => 'set_tetra_api_key']],
+                [['text' => '◀️ بازگشت به انتخاب درگاه', 'callback_data' => 'back_to_gateway_menu']],
+            ]
+        ];
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    }
+    elseif ($data === 'back_to_gateway_menu') {
+         $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '🔵 مدیریت زرین‌پال', 'callback_data' => 'manage_gateway_zarinpal']],
+                [['text' => '🟣 مدیریت تترا 98', 'callback_data' => 'manage_gateway_tetra']],
+                [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
+            ]
+        ];
+        editMessageText($chat_id, $message_id, "<b>💳 مدیریت درگاه‌های پرداخت</b>\n\nلطفا درگاه مورد نظر برای مدیریت را انتخاب کنید:", $keyboard);
+    }
+    elseif ($data === 'toggle_tetra_status') {
+        $settings = getSettings();
+        $settings['tetra_status'] = ($settings['tetra_status'] ?? 'off') == 'on' ? 'off' : 'on';
+        saveSettings($settings);
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
+        $data = 'manage_gateway_tetra'; 
+    }
+    elseif ($data === 'set_tetra_api_key') {
+        updateUserData($chat_id, 'admin_awaiting_tetra_api_key');
+        editMessageText($chat_id, $message_id, "لطفا ApiKey درگاه تترا 98 خود را وارد کنید:");
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+    }
+    elseif ($data === 'toggle_custom_config_status' && $isAnAdmin && hasPermission($chat_id, 'manage_custom_config')) {
+        $settings = getSettings();
+        $settings['custom_config_status'] = ($settings['custom_config_status'] ?? 'off') == 'on' ? 'off' : 'on';
+        saveSettings($settings);
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ وضعیت تغییر کرد.']);
+        showCustomConfigManagementMenu($chat_id, $message_id);
+        die;
+    }
+    elseif ($data === 'set_custom_price_day' && $isAnAdmin && hasPermission($chat_id, 'manage_custom_config')) {
+        updateUserData($chat_id, 'admin_awaiting_custom_price_day');
+        editMessageText($chat_id, $message_id, "لطفا هزینه کانفیگ دلخواه به ازای هر **روز** را به تومان وارد کنید (فقط عدد):");
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
+    elseif ($data === 'set_custom_price_gb' && $isAnAdmin && hasPermission($chat_id, 'manage_custom_config')) {
+        updateUserData($chat_id, 'admin_awaiting_custom_price_gb');
+        editMessageText($chat_id, $message_id, "لطفا هزینه کانفیگ دلخواه به ازای هر **گیگابایت** را به تومان وارد کنید (فقط عدد):");
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
+    elseif ($data === 'set_custom_max_days' && $isAnAdmin && hasPermission($chat_id, 'manage_custom_config')) {
+        updateUserData($chat_id, 'admin_awaiting_custom_max_days');
+        editMessageText($chat_id, $message_id, "لطفا حداکثر تعداد روز قابل خرید را وارد کنید (0 برای نامحدود):");
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
+    elseif ($data === 'set_custom_max_gb' && $isAnAdmin && hasPermission($chat_id, 'manage_custom_config')) {
+        updateUserData($chat_id, 'admin_awaiting_custom_max_gb');
+        editMessageText($chat_id, $message_id, "لطفا حداکثر حجم قابل خرید (به گیگابایت) را وارد کنید (0 برای نامحدود):");
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
+    
+        
         if (strpos($data, 'add_balance_') === 0 && hasPermission($chat_id, 'manage_users')) {
             $target_id = str_replace('add_balance_', '', $data);
             updateUserData($chat_id, 'admin_awaiting_amount_for_add_balance', ['target_user_id' => $target_id, 'admin_view' => 'admin']);
@@ -214,7 +392,7 @@ if (isset($update['callback_query'])) {
                     $message_text .= "▫️ تاریخ انقضا: {$expire_date}\n---\n";
                 }
                 
-                // پیام را در یک پیام جدید ارسال می‌کنیم تا منوی مدیریت اصلی حفظ شود
+                
                 sendMessage($chat_id, $message_text);
                 apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
             }
@@ -261,7 +439,7 @@ if (isset($update['callback_query'])) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
             die;
         }
-        // end
+        
         
         if (strpos($data, 'delete_cat_') === 0 && hasPermission($chat_id, 'manage_categories')) {
             $cat_id = str_replace('delete_cat_', '', $data);
@@ -273,50 +451,31 @@ if (isset($update['callback_query'])) {
             generateCategoryList($chat_id);
         }
     elseif (strpos($data, 'charge_zarinpal_') === 0) {
-        $amount = (int)str_replace('charge_zarinpal_', '', $data);
-        $settings = getSettings();
-        $merchant_id = $settings['zarinpal_merchant_id'];
-        
-        $script_url = 'https://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/verify_payment.php';
-        
-        $data = [
-            "merchant_id" => $merchant_id,
-            "amount" => $amount * 10, // تبدیل تومان به ریال
-            "callback_url" => $script_url,
-            "description" => "شارژ حساب کاربری - " . $chat_id,
-            "metadata" => ["order_id" => "user_{$chat_id}_" . time()]
-        ];
-        $jsonData = json_encode($data);
+    $amount = (int)str_replace('charge_zarinpal_', '', $data);
+    $description = "شارژ حساب کاربری - " . $chat_id;
+    $zarinpal_result = createZarinpalLink($chat_id, $amount, $description);
 
-        $ch = curl_init('https://api.zarinpal.com/pg/v4/payment/request.json');
-        curl_setopt($ch, CURLOPT_USERAGENT, 'ZarinPal Rest Api v4');
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json', 'Content-Length: ' . strlen($jsonData)]);
-        
-        $result = curl_exec($ch);
-        curl_close($ch);
-        $result = json_decode($result, true);
-        
-        if (empty($result['errors'])) {
-            $authority = $result['data']['authority'];
-            
-            // ثبت تراکنش در دیتابیس
-            $stmt = pdo()->prepare("INSERT INTO transactions (user_id, amount, authority, description) VALUES (?, ?, ?, ?)");
-            $stmt->execute([$chat_id, $amount, $authority, "شارژ حساب"]);
-            
-            $payment_url = 'https://www.zarinpal.com/pg/StartPay/' . $authority;
-            
-            $message = "⏳ در حال انتقال به درگاه پرداخت... لطفا صبر کنید.";
-            $keyboard = ['inline_keyboard' => [[['text' => '🚀 ورود به صفحه پرداخت', 'url' => $payment_url]]]];
-            editMessageText($chat_id, $message_id, $message, $keyboard);
-            
-        } else {
-            $error_code = $result['errors']['code'];
-            editMessageText($chat_id, $message_id, "❌ خطا در اتصال به درگاه پرداخت. کد خطا: {$error_code}");
-        }
+    if ($zarinpal_result['success']) {
+        $message = "⏳ در حال انتقال به درگاه پرداخت زرین‌پال... لطفا صبر کنید.";
+        $keyboard = ['inline_keyboard' => [[['text' => '🚀 ورود به صفحه پرداخت', 'url' => $zarinpal_result['url']]]]];
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    } else {
+        editMessageText($chat_id, $message_id, $zarinpal_result['error']);
     }
+}
+    elseif (strpos($data, 'charge_tetra_') === 0) {
+    $amount = (int)str_replace('charge_tetra_', '', $data);
+    $description = "شارژ حساب کاربری - " . $chat_id;
+    $tetra_result = createTetraLink($chat_id, $amount, $description);
+
+    if ($tetra_result['success']) {
+        $message = "⏳ در حال انتقال به درگاه پرداخت تترا... لطفا صبر کنید.";
+        $keyboard = ['inline_keyboard' => [[['text' => '🚀 ورود به صفحه پرداخت', 'url' => $tetra_result['url']]]]];
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    } else {
+        editMessageText($chat_id, $message_id, $tetra_result['error']);
+    }
+}
         elseif ($data === 'toggle_gateway_status') {
             $settings = getSettings();
             $settings['payment_gateway_status'] = ($settings['payment_gateway_status'] ?? 'off') == 'on' ? 'off' : 'on';
@@ -629,35 +788,59 @@ if (isset($update['callback_query'])) {
                 pdo()->prepare("UPDATE payment_requests SET status = 'approved', processed_by_admin_id = ?, processed_at = NOW() WHERE id = ?")->execute([$admin_who_processed, $request_id]);
 
                 if (isset($metadata['purpose']) && $metadata['purpose'] === 'complete_purchase') {
-                    // این پرداخت برای تکمیل خرید یک پلن
+                    
                     $plan_id = $metadata['plan_id'];
                     $discount_code = $metadata['discount_code'] ?? null;
-                    
-                    $plan = getPlanById($plan_id);
-                    $final_price = (float)$plan['price'];
-                    $discount_applied = false;
-                    $discount_object = null;
+                    $is_custom_config = $metadata['is_custom_config'] ?? false;
+                    $custom_name = $metadata['custom_name'] ?? 'سرویس';
 
-                    if ($discount_code) {
-                        $stmt_discount = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ?");
-                        $stmt_discount->execute([$discount_code]);
-                        $discount_object = $stmt_discount->fetch();
-                        if ($discount_object) {
-                             if ($discount_object['type'] == 'percent') {
-                                $final_price = $plan['price'] - ($plan['price'] * $discount_object['value']) / 100;
-                            } else {
-                                $final_price = $plan['price'] - $discount_object['value'];
-                            }
-                            $final_price = max(0, $final_price);
-                            $discount_applied = true;
+                    if ($is_custom_config) {
+                        
+                        $temp_plan_data = pdo()->prepare("SELECT state_data FROM users WHERE chat_id = ?")->execute([$user_id_to_charge]) ? json_decode(pdo()->fetchColumn(), true)['temp_custom_plan'] : null;
+                        
+                        if (!$temp_plan_data) {
+                            sendMessage($user_id_to_charge, "❌ خطایی در بازیابی اطلاعات کانفیگ دلخواه رخ داد. مبلغ پرداخت شده به موجودی شما اضافه شد. لطفاً با پشتیبانی تماس بگیرید.");
+                            updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
+                            editMessageCaption($chat_id, $message_id, $update['callback_query']['message']['caption'] . "\n\n<b>❌ خطا در بازیابی اطلاعات کانفیگ دلخواه.</b>", null);
+                            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ خطا در بازیابی اطلاعات کانفیگ دلخواه.']);
+                            die;
                         }
-                    }
-                    
-                    // شارژ موقت حساب کاربر با مبلغ پرداختی
-                    updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
+                        
+                        $final_price = (float)$temp_plan_data['price'];
+                        
+                        
+                        updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
+                        
+                        $purchase_result = completeCustomPurchase($user_id_to_charge, $temp_plan_data, $custom_name, $final_price);
+                        
+                    } else {
+                        
+                        $plan = getPlanById($plan_id);
+                        $final_price = (float)$plan['price'];
+                        $discount_applied = false;
+                        $discount_object = null;
 
-                    $custom_name = $metadata['custom_name'] ?? 'سرویس'; 
-$purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied);
+                        if ($discount_code) {
+                            $stmt_discount = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ?");
+                            $stmt_discount->execute([$discount_code]);
+                            $discount_object = $stmt_discount->fetch();
+                            if ($discount_object) {
+                                 if ($discount_object['type'] == 'percent') {
+                                    $final_price = $plan['price'] - ($plan['price'] * $discount_object['value']) / 100;
+                                } else {
+                                    $final_price = $plan['price'] - $discount_object['value'];
+                                }
+                                $final_price = max(0, $final_price);
+                                $discount_applied = true;
+                            }
+                        }
+                        
+                        
+                        updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
+
+                        $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied);
+                    }
+
 
                     if ($purchase_result['success']) {
                         sendPhoto($user_id_to_charge, $purchase_result['qr_code_url'], $purchase_result['caption']);
@@ -669,7 +852,7 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
                     updateUserData($user_id_to_charge, 'main_menu');
 
                 } else {
-                    // پرداخت برای شارژ عادی حساب بوده است
+                    
                     updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
                     $new_balance_data = getUserData($user_id_to_charge);
                     sendMessage($user_id_to_charge, "✅ حساب شما به مبلغ " . number_format($amount_to_charge) . " تومان شارژ شد.\nموجودی جدید: " . number_format($new_balance_data['balance']) . " تومان");
@@ -1146,7 +1329,7 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
         }
     }
 
-    // --- منطق دکمه‌های تیکت پشتیبانی ---
+    
     if (strpos($data, 'reply_ticket_') === 0) {
         if ($isAnAdmin && !hasPermission($chat_id, 'view_tickets')) {
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'شما دسترسی لازم برای پاسخ به تیکت‌ها را ندارید.', 'show_alert' => true]);
@@ -1231,7 +1414,7 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
         }
     }
 
-    // --- دکمه‌های عمومی کاربران ---
+    
     elseif (strpos($data, 'get_configs_') === 0) {
         $username = str_replace('get_configs_', '', $data);
         
@@ -1247,7 +1430,7 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
         $panel_user = getPanelUser($username, $server_id);
         
         if ($panel_user && !empty($panel_user['links'])) {
-            // --- ارسال مستقیم همه کانفیگ‌ها ---
+            
             $all_links_text = implode("\n\n", $panel_user['links']);
             sendMessage($chat_id, "<b>تمام کانفیگ‌های شما (برای کپی آسان):</b>\n\nبا کلیک روی متن زیر، تمام لینک‌ها به صورت خودکار کپی می‌شوند.\n\n<code>" . htmlspecialchars($all_links_text) . "</code>");
             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ تمام کانفیگ‌ها برای شما ارسال شد!']);
@@ -1316,10 +1499,10 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
     elseif (strpos($data, 'apply_discount_code_') === 0) {
         $parts = explode('_', $data);
         $category_id = $parts[3];
-        $server_id = $parts[4]; // server_id اضافه شد
+        $server_id = $parts[4]; 
         updateUserData($chat_id, 'user_awaiting_discount_code', [
             'target_category_id' => $category_id,
-            'target_server_id' => $server_id // server_id در state ذخیره می‌شود
+            'target_server_id' => $server_id 
         ]);
         editMessageText($chat_id, $message_id, "🎁 لطفاً کد تخفیف خود را وارد کنید:");
         apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
@@ -1347,7 +1530,7 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
         die;
     }
 
-    // به جای خرید مستقیم، وضعیت را برای دریافت نام تنظیم می‌کنیم
+    
     $state_data = [
         'purchasing_plan_id' => $plan_id,
         'discount_code' => $discount_code
@@ -1362,12 +1545,88 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
     apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
     die;
 }
+    elseif ($data == 'back_to_custom_categories') {
+        deleteMessage($chat_id, $message_id);
+        handleCustomConfigStart($chat_id);
+    }
+    elseif (strpos($data, 'select_custom_server_cat_') === 0) {
+        preg_match('/select_custom_server_cat_(\d+)_srv_(\d+)/', $data, $matches);
+        $category_id = $matches[1];
+        $server_id = $matches[2];
+        
+        $state_data = [
+            'custom_config_category_id' => $category_id,
+            'custom_config_server_id' => $server_id,
+        ];
+        updateUserData($chat_id, 'awaiting_custom_config_name', $state_data);
+        
+        $message = "✅ سرور انتخاب شد.\n\nلطفاً یک نام دلخواه برای این کانفیگ وارد کنید (مثلاً: کانفیگ دلخواه من).";
+        
+        deleteMessage($chat_id, $message_id);
+        sendMessage($chat_id, $message, $cancelKeyboard);
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
+    elseif (strpos($data, 'confirm_custom_purchase_') === 0) {
+        $state_data = $user_data['state_data'];
+        $total_cost = $state_data['temp_custom_plan']['price'];
+        $custom_name = $state_data['temp_custom_plan']['name'];
+        $encoded_name = base64_encode($custom_name);
+        
+        if ($user_data['balance'] >= $total_cost) {
+            
+            editMessageText($chat_id, $message_id, "⏳ در حال ایجاد کانفیگ دلخواه با استفاده از موجودی شما...");
+            
+            $purchase_result = completeCustomPurchase($chat_id, $state_data['temp_custom_plan'], $custom_name, $total_cost);
+            
+            if ($purchase_result['success']) {
+                $new_balance = number_format($user_data['balance'] - $total_cost);
+                $success_msg = "✅ کانفیگ دلخواه شما با موفقیت ایجاد شد.\n\n" .
+                               "💰 مبلغ " . number_format($total_cost) . " تومان از حساب شما کسر گردید.\n" .
+                               "موجودی جدید: {$new_balance} تومان.";
+                sendPhoto($chat_id, $purchase_result['qr_code_url'], $purchase_result['caption'], $purchase_result['keyboard']);
+                sendMessage(ADMIN_CHAT_ID, $purchase_result['admin_notification']);
+                deleteMessage($chat_id, $message_id);
+            } else {
+                editMessageText($chat_id, $message_id, "❌ خطایی در ایجاد سرویس رخ داد: " . $purchase_result['error_message']);
+            }
+            updateUserData($chat_id, 'main_menu');
+            handleMainMenu($chat_id, $first_name);
+        } else {
+            
+            $needed_amount = $total_cost - $user_data['balance'];
+            $settings = getSettings();
+            
+            $keyboard_buttons = [];
+            if (($settings['payment_gateway_status'] ?? 'off') == 'on' && !empty($settings['zarinpal_merchant_id'])) {
+                $callback_data_online = "charge_for_plan_{$needed_amount}_0_{$encoded_name}_custom";
+                $keyboard_buttons[] = [['text' => '🌐 پرداخت آنلاین (زرین‌پال)', 'callback_data' => $callback_data_online]];
+            }
+            if (!empty($settings['payment_method']['card_number'])) {
+                $callback_data_manual = "manual_pay_for_plan_{$needed_amount}_0_{$encoded_name}_custom";
+                $keyboard_buttons[] = [['text' => '💳 پرداخت کارت به کارت', 'callback_data' => $callback_data_manual]];
+            }
+
+            if (empty($keyboard_buttons)) {
+                editMessageText($chat_id, $message_id, "❌ موجودی شما کافی نیست و هیچ روش پرداختی توسط ادمین فعال نشده است.");
+            } else {
+                $message = "⚠️ موجودی شما کافی نیست!\n\n" .
+                           "▫️ هزینه کانفیگ: " . number_format($total_cost) . " تومان\n" .
+                           "▫️ موجودی شما: " . number_format($user_data['balance']) . " تومان\n" .
+                           "<b>💰 مبلغ مورد نیاز: " . number_format($needed_amount) . " تومان</b>\n\n" .
+                           "لطفاً روش پرداخت برای تکمیل خرید را انتخاب کنید:";
+                editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+            }
+        }
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        die;
+    }
     elseif ($data === 'confirm_renewal_payment') {
         $state_data = $user_data['state_data'];
         $total_cost = $state_data['renewal_total_cost'];
 
         if ($user_data['balance'] >= $total_cost) {
-            // پرداخت از موجودی
+            
             editMessageText($chat_id, $message_id, "⏳ در حال تمدید سرویس با استفاده از موجودی شما...");
             updateUserBalance($chat_id, $total_cost, 'deduct');
             
@@ -1589,9 +1848,9 @@ $purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, 
     }
 }
 
-// ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
-// ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ پردازش پیام‌ها ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
-// ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
+
+
+
 if (isset($update['message']) || USER_INLINE_KEYBOARD) {
     $is_verified = $user_data['is_verified'] ?? 0;
     $verification_method = $settings['verification_method'] ?? 'off';
@@ -1622,14 +1881,15 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             $user_id = $update['message']['from']['id'];
             $photo_id = $update['message']['photo'][count($update['message']['photo']) - 1]['file_id'];
             
-            // --- آماده‌سازی metadata ---
+            
             $metadata_to_save = null;
             if (isset($state_data['purpose']) && $state_data['purpose'] === 'complete_purchase') {
                 $metadata_to_save = json_encode([
     'purpose' => 'complete_purchase',
     'plan_id' => $state_data['plan_id'],
     'discount_code' => $state_data['discount_code'] ?? null,
-    'custom_name' => $state_data['custom_name'] ?? 'سرویس' // اضافه کردن نام دلخواه
+    'custom_name' => $state_data['custom_name'] ?? 'سرویس', 
+    'is_custom_config' => $state_data['is_custom_config'] ?? false
 ]);
 }
      
@@ -1695,11 +1955,11 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
 
     $text = trim($update['message']['text'] ?? ($update['callback_query']['data'] ?? ''));
 
-    if ($text == '/start') {
-        updateUserData($chat_id, 'main_menu', ['admin_view' => 'user']);
-        handleMainMenu($chat_id, $first_name, true);
-        die;
-    }
+if ($text == '/start') {
+    updateUserData($chat_id, 'main_menu', ['admin_view' => 'user']);
+    handleMainMenu($chat_id, $first_name, true);
+    die;
+}
 
     if ($text == 'لغو' || $text == '◀️ بازگشت به منوی اصلی') {
         $admin_view_mode = $user_data['state_data']['admin_view'] ?? 'user';
@@ -1739,7 +1999,211 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
 
     if ($user_state !== 'main_menu') {
         switch ($user_state) {
+            case 'admin_awaiting_referrer_reward':
+    if (hasPermission($chat_id, 'manage_referrals') && is_numeric($text) && $text >= 0) {
+        $settings = getSettings();
+        $settings['referral_reward_referrer'] = (int)$text;
+        saveSettings($settings);
+        sendMessage($chat_id, "✅ مبلغ با موفقیت تنظیم شد.");
+        updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+        showReferralManagementMenu($chat_id);
+    } else {
+        sendMessage($chat_id, "❌ لطفا فقط عدد وارد کنید.");
+    }
+    break;
+
+case 'admin_awaiting_referred_reward':
+    if (hasPermission($chat_id, 'manage_referrals') && is_numeric($text) && $text >= 0) {
+        $settings = getSettings();
+        $settings['referral_reward_referred'] = (int)$text;
+        saveSettings($settings);
+        sendMessage($chat_id, "✅ مبلغ با موفقیت تنظیم شد.");
+        updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+        showReferralManagementMenu($chat_id);
+    } else {
+        sendMessage($chat_id, "❌ لطفا فقط عدد وارد کنید.");
+    }
+    break;
+
+case 'admin_awaiting_commission_rate':
+    if (hasPermission($chat_id, 'manage_referrals') && is_numeric($text) && $text >= 0 && $text <= 100) {
+        $settings = getSettings();
+        $settings['referral_commission_rate'] = (float)$text;
+        saveSettings($settings);
+        sendMessage($chat_id, "✅ درصد کمیسیون با موفقیت تنظیم شد.");
+        updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+        showReferralManagementMenu($chat_id);
+    } else {
+        sendMessage($chat_id, "❌ لطفا فقط یک عدد بین 0 تا 100 وارد کنید.");
+    }
+    break;
+            case 'admin_awaiting_tetra_api_key':
+            if ($isAnAdmin) {
+                $settings = getSettings();
+                $settings['tetra_api_key'] = trim($text);
+                saveSettings($settings);
+                sendMessage($chat_id, "✅ کلید API تترا 98 با موفقیت ذخیره شد.");
+                updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+                
+                $keyboard = [
+                    'inline_keyboard' => [
+                        [['text' => '🔵 مدیریت زرین‌پال', 'callback_data' => 'manage_gateway_zarinpal']],
+                        [['text' => '🟣 مدیریت تترا 98', 'callback_data' => 'manage_gateway_tetra']],
+                        [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
+                    ]
+                ];
+                sendMessage($chat_id, "منوی مدیریت درگاه‌ها:", $keyboard);
+            }
+            break;
             
+            case 'admin_awaiting_custom_price_day':
+                if ($isAnAdmin && hasPermission($chat_id, 'manage_custom_config') && is_numeric($text) && $text >= 0) {
+                    $settings = getSettings();
+                    $settings['custom_price_per_day'] = (int)$text;
+                    saveSettings($settings);
+                    sendMessage($chat_id, "✅ قیمت روز با موفقیت تنظیم شد.");
+                    updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+                    showCustomConfigManagementMenu($chat_id);
+                } else {
+                    sendMessage($chat_id, "❌ لطفا فقط عدد وارد کنید.");
+                }
+                break;
+            case 'admin_awaiting_custom_price_gb':
+                if ($isAnAdmin && hasPermission($chat_id, 'manage_custom_config') && is_numeric($text) && $text >= 0) {
+                    $settings = getSettings();
+                    $settings['custom_price_per_gb'] = (int)$text;
+                    saveSettings($settings);
+                    sendMessage($chat_id, "✅ قیمت حجم با موفقیت تنظیم شد.");
+                    updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+                    showCustomConfigManagementMenu($chat_id);
+                } else {
+                    sendMessage($chat_id, "❌ لطفا فقط عدد وارد کنید.");
+                }
+                break;
+            case 'admin_awaiting_custom_max_days':
+                if ($isAnAdmin && hasPermission($chat_id, 'manage_custom_config') && is_numeric($text) && $text >= 0) {
+                    $settings = getSettings();
+                    $settings['custom_max_days'] = (int)$text;
+                    saveSettings($settings);
+                    sendMessage($chat_id, "✅ حداکثر روز با موفقیت تنظیم شد.");
+                    updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+                    showCustomConfigManagementMenu($chat_id);
+                } else {
+                    sendMessage($chat_id, "❌ لطفا فقط عدد وارد کنید.");
+                }
+                break;
+            case 'admin_awaiting_custom_max_gb':
+                if ($isAnAdmin && hasPermission($chat_id, 'manage_custom_config') && is_numeric($text) && $text >= 0) {
+                    $settings = getSettings();
+                    $settings['custom_max_gb'] = (int)$text;
+                    saveSettings($settings);
+                    sendMessage($chat_id, "✅ حداکثر حجم با موفقیت تنظیم شد.");
+                    updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
+                    showCustomConfigManagementMenu($chat_id);
+                } else {
+                    sendMessage($chat_id, "❌ لطفا فقط عدد وارد کنید.");
+                }
+                break;
+            
+            case 'awaiting_custom_config_name':
+                $custom_name = trim($text);
+                
+                if (empty($custom_name) || mb_strlen($custom_name) > 50) {
+                    sendMessage($chat_id, "❌ نام وارد شده نامعتبر است. لطفاً یک نام کوتاه‌تر (حداکثر 50 کاراکتر) وارد کنید.", $cancelKeyboard);
+                    break;
+                }
+                
+                $state_data = $user_data['state_data'];
+                $state_data['custom_config_name'] = $custom_name;
+                updateUserData($chat_id, 'awaiting_custom_config_volume', $state_data);
+                
+                $settings = getSettings();
+                $max_gb = (int)($settings['custom_max_gb'] ?? 0);
+                $max_gb_text = $max_gb == 0 ? 'نامحدود' : "حداکثر {$max_gb} گیگابایت";
+                
+                sendMessage($chat_id, "۱/۳ - نام کانفیگ: <b>{$custom_name}</b>\n\nلطفاً حجم مورد نظر خود را به **گیگابایت (GB)** وارد کنید. ({$max_gb_text})", $cancelKeyboard);
+                break;
+
+            case 'awaiting_custom_config_volume':
+                if (!is_numeric($text) || $text < 1) {
+                    sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح و مثبت وارد کنید.", $cancelKeyboard);
+                    break;
+                }
+                $volume_gb = (int)$text;
+                $settings = getSettings();
+                $max_gb = (int)($settings['custom_max_gb'] ?? 0);
+                
+                if ($max_gb > 0 && $volume_gb > $max_gb) {
+                    sendMessage($chat_id, "❌ حداکثر حجم قابل خرید {$max_gb} گیگابایت است. لطفا مقدار کمتری وارد کنید.", $cancelKeyboard);
+                    break;
+                }
+                
+                $state_data = $user_data['state_data'];
+                $state_data['custom_config_volume'] = $volume_gb;
+                updateUserData($chat_id, 'awaiting_custom_config_days', $state_data);
+                
+                $max_days = (int)($settings['custom_max_days'] ?? 0);
+                $max_days_text = $max_days == 0 ? 'نامحدود' : "حداکثر {$max_days} روز";
+                
+                sendMessage($chat_id, "۲/۳ - حجم: <b>{$volume_gb} GB</b>\n\nلطفاً تعداد **روز** مورد نظر خود را وارد کنید. ({$max_days_text})", $cancelKeyboard);
+                break;
+
+            case 'awaiting_custom_config_days':
+                if (!is_numeric($text) || $text < 1) {
+                    sendMessage($chat_id, "❌ لطفا فقط یک عدد صحیح و مثبت وارد کنید.", $cancelKeyboard);
+                    break;
+                }
+                $duration_days = (int)$text;
+                $settings = getSettings();
+                $max_days = (int)($settings['custom_max_days'] ?? 0);
+                
+                if ($max_days > 0 && $duration_days > $max_days) {
+                    sendMessage($chat_id, "❌ حداکثر روز قابل خرید {$max_days} روز است. لطفا مقدار کمتری وارد کنید.", $cancelKeyboard);
+                    break;
+                }
+                
+                $state_data = $user_data['state_data'];
+                $volume_gb = $state_data['custom_config_volume'];
+                $custom_name = $state_data['custom_config_name'];
+                
+                $price_day = (int)($settings['custom_price_per_day'] ?? 1000);
+                $price_gb = (int)($settings['custom_price_per_gb'] ?? 2000);
+                
+                $cost_days = $duration_days * $price_day;
+                $cost_gb = $volume_gb * $price_gb;
+                $total_cost = $cost_days + $cost_gb;
+                
+                
+                $temp_plan = [
+                    'id' => 0, 
+                    'server_id' => $state_data['custom_config_server_id'],
+                    'category_id' => $state_data['custom_config_category_id'],
+                    'inbound_id' => null,
+                    'marzneshin_service_id' => null,
+                    'name' => $custom_name,
+                    'price' => $total_cost,
+                    'volume_gb' => $volume_gb,
+                    'duration_days' => $duration_days,
+                    'show_sub_link' => true,
+                    'show_conf_links' => true,
+                ];
+                
+                $state_data['temp_custom_plan'] = $temp_plan;
+                updateUserData($chat_id, 'user_confirming_custom_config', $state_data);
+                
+                $summary = "۳/۳ - روز: <b>{$duration_days} روز</b>\n\n" .
+                           "<b>خلاصه کانفیگ دلخواه شما:</b>\n" .
+                           "▫️ نام: <b>" . htmlspecialchars($custom_name) . "</b>\n" .
+                           "▫️ حجم: <b>{$volume_gb} گیگابایت</b> (هزینه: " . number_format($cost_gb) . " تومان)\n" .
+                           "▫️ مدت: <b>{$duration_days} روز</b> (هزینه: " . number_format($cost_days) . " تومان)\n\n" .
+                           "💰 هزینه کل: <b>" . number_format($total_cost) . " تومان</b>\n\n" .
+                           "موجودی فعلی شما: " . number_format($user_data['balance']) . " تومان\n\n" .
+                           "آیا تایید می‌کنید؟";
+
+                $keyboard = ['inline_keyboard' => [[['text' => '✅ بله، پرداخت کن', 'callback_data' => 'confirm_custom_purchase_0']]]];
+                sendMessage($chat_id, $summary, $keyboard);
+                break;
+             
             case 'awaiting_service_name':
     $custom_name = trim($text);
     if (empty($custom_name) || mb_strlen($custom_name) > 50) {
@@ -1758,7 +2222,7 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
         break;
     }
 
-    // --- کپی کردن منطق بررسی موجودی و قیمت نهایی از کد قبلی ---
+    
     $final_price = (float)$plan['price'];
     $discount_applied = false;
     $discount_object = null;
@@ -1795,25 +2259,35 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
         handleMainMenu($chat_id, $first_name);
 
     } else {
-    // کاربر موجودی کافی ندارد، فاکتور صادر شود
-    $needed_amount = $final_price - $user_balance;
-    $settings = getSettings();
     
-    $encoded_name = base64_encode($custom_name);
-
-    $keyboard_buttons = [];
-    if (($settings['payment_gateway_status'] ?? 'off') == 'on' && !empty($settings['zarinpal_merchant_id'])) {
-        $callback_data_online = "charge_for_plan_{$needed_amount}_{$plan_id}";
-        if ($discount_code) $callback_data_online .= "_{$discount_code}";
-        $callback_data_online .= "_{$encoded_name}"; // اضافه کردن نام به انتها
-        $keyboard_buttons[] = [['text' => '🌐 پرداخت آنلاین (زرین‌پال)', 'callback_data' => $callback_data_online]];
-    }
-    if (!empty($settings['payment_method']['card_number'])) {
-        $callback_data_manual = "manual_pay_for_plan_{$needed_amount}_{$plan_id}";
-        if ($discount_code) $callback_data_manual .= "_{$discount_code}";
-        $callback_data_manual .= "_{$encoded_name}"; // اضافه کردن نام به انتها
-        $keyboard_buttons[] = [['text' => '💳 پرداخت کارت به کارت', 'callback_data' => $callback_data_manual]];
-    }
+    
+        $needed_amount = $final_price - $user_balance;
+        $settings = getSettings();
+        
+        $encoded_name = base64_encode($custom_name);
+    
+        $keyboard_buttons = [];
+        
+        if (!empty($settings['payment_method']['card_number'])) {
+            $callback_data_manual = "manual_pay_for_plan_{$needed_amount}_{$plan_id}";
+            if ($discount_code) $callback_data_manual .= "_{$discount_code}";
+            $callback_data_manual .= "_{$encoded_name}";
+            $keyboard_buttons[] = [['text' => '💳 پرداخت کارت به کارت', 'callback_data' => $callback_data_manual]];
+        }
+        
+        if (($settings['payment_gateway_status'] ?? 'off') == 'on' && !empty($settings['zarinpal_merchant_id'])) {
+            $callback_data_online = "charge_for_plan_{$needed_amount}_{$plan_id}";
+            if ($discount_code) $callback_data_online .= "_{$discount_code}";
+            $callback_data_online .= "_{$encoded_name}";
+            $keyboard_buttons[] = [['text' => '🔵 پرداخت با زرین‌پال', 'callback_data' => $callback_data_online]];
+        }
+        
+        if (($settings['tetra_status'] ?? 'off') == 'on' && !empty($settings['tetra_api_key'])) {
+            $callback_data_tetra = "tetra_pay_for_plan_{$needed_amount}_{$plan_id}";
+            if ($discount_code) $callback_data_tetra .= "_{$discount_code}";
+            $callback_data_tetra .= "_{$encoded_name}";
+            $keyboard_buttons[] = [['text' => '🟣 پرداخت با تترا 98', 'callback_data' => $callback_data_tetra]];
+        }
 
         if (empty($keyboard_buttons)) {
             sendMessage($chat_id, "❌ موجودی شما کافی نیست و هیچ روش پرداختی توسط ادمین فعال نشده است.");
@@ -1852,7 +2326,7 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                     }
                     
 
-                    // نمایش اطلاعات و دکمه‌های مدیریتی
+                    
                     $balance = $target_user['balance'] ?? 0;
                     $status_text = ($target_user['status'] ?? 'active') === 'active' ? 'فعال ✅' : 'مسدود 🚫';
 
@@ -1884,7 +2358,7 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                     ]];
 
                     sendMessage($chat_id, $message, $keyboard);
-                    // وضعیت را به حالت انتظار برای جستجوی بعدی برمی‌گردانیم تا ادمین بتواند پشت سر هم جستجو کند
+                    
                     updateUserData($chat_id, 'admin_awaiting_user_search', ['admin_view' => 'admin']);
                 }
                 break;
@@ -2143,10 +2617,10 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                     $tokenResult = getSanaeiCookie($new_server_id);
                 } elseif ($state_data['selected_server_type'] === 'marzneshin') {
                     $tokenResult = getMarzneshinToken($new_server_id);
-                    // برای مرزنشین، اگر نتیجه یک آرایه باشد، یعنی خطا است
+                    
                     if (is_array($tokenResult) && isset($tokenResult['error'])) {
                         $connection_error = $tokenResult['error'];
-                        $tokenResult = false; // ست کردن روی false تا شرط پایین برقرار شود
+                        $tokenResult = false; 
                     }
                 }
 
@@ -2195,33 +2669,37 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                 deleteMessage($chat_id, $user_message_id);
                 break;
 
-                        case 'awaiting_charge_amount':
-                if (!is_numeric($text) || $text <= 0) {
-                    sendMessage($chat_id, "❌ لطفا یک مبلغ معتبر (عدد مثبت) به تومان وارد کنید.", $cancelKeyboard);
-                    break;
-                }
-                $amount = (int)$text;
-                $settings = getSettings();
-                
-                $keyboard_buttons = [];
-               
-                if (!empty($settings['payment_method']['card_number'])) {
-                    $keyboard_buttons[] = [['text' => '💳 پرداخت کارت به کارت', 'callback_data' => "charge_manual_{$amount}"]];
-                }
+                case 'awaiting_charge_amount':
+        if (!is_numeric($text) || $text <= 0) {
+            sendMessage($chat_id, "❌ لطفا یک مبلغ معتبر (عدد مثبت) به تومان وارد کنید.", $cancelKeyboard);
+            break;
+        }
+        $amount = (int)$text;
+        $settings = getSettings();
+        
+        $keyboard_buttons = [];
+       
+        if (!empty($settings['payment_method']['card_number'])) {
+            $keyboard_buttons[] = [['text' => '💳 پرداخت کارت به کارت', 'callback_data' => "charge_manual_{$amount}"]];
+        }
 
-                if (($settings['payment_gateway_status'] ?? 'off') == 'on' && !empty($settings['zarinpal_merchant_id'])) {
-                    $keyboard_buttons[] = [['text' => '🌐 پرداخت آنلاین (زرین‌پال)', 'callback_data' => "charge_zarinpal_{$amount}"]];
-                }
-                
-                if (empty($keyboard_buttons)) {
-                    sendMessage($chat_id, "متاسفانه هیچ روش پرداختی توسط ادمین فعال نشده است.");
-                    updateUserData($chat_id, 'main_menu');
-                    handleMainMenu($chat_id, $first_name);
-                } else {
-                    $message = "لطفا روش پرداخت برای شارژ به مبلغ " . number_format($amount) . " تومان را انتخاب کنید:";
-                    sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
-                }
-                break;
+        if (($settings['payment_gateway_status'] ?? 'off') == 'on' && !empty($settings['zarinpal_merchant_id'])) {
+            $keyboard_buttons[] = [['text' => '🔵 پرداخت با زرین‌پال', 'callback_data' => "charge_zarinpal_{$amount}"]];
+        }
+        
+        if (($settings['tetra_status'] ?? 'off') == 'on' && !empty($settings['tetra_api_key'])) {
+            $keyboard_buttons[] = [['text' => '🟣 پرداخت با تترا 98', 'callback_data' => "charge_tetra_{$amount}"]];
+        }
+        
+        if (empty($keyboard_buttons)) {
+            sendMessage($chat_id, "متاسفانه هیچ روش پرداختی توسط ادمین فعال نشده است.");
+            updateUserData($chat_id, 'main_menu');
+            handleMainMenu($chat_id, $first_name);
+        } else {
+            $message = "لطفا روش پرداخت برای شارژ به مبلغ " . number_format($amount) . " تومان را انتخاب کنید:";
+            sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+        }
+        break;
 
             case 'awaiting_ticket_subject':
                 updateUserData($chat_id, 'awaiting_ticket_message', ['ticket_subject' => $text]);
@@ -2975,11 +3453,19 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             }
             break;
 
+        case '🛠 کانفیگ دلخواه':
+            handleCustomConfigStart($chat_id);
+            break;
+
         case '👑 ورود به پنل مدیریت':
             if ($isAnAdmin) {
                 updateUserData($chat_id, 'main_menu', ['admin_view' => 'admin']);
                 handleMainMenu($chat_id, $first_name, true);
             }
+            break;
+            
+        case '🤝 زیرمجموعه‌گیری':
+            showReferralMenu($chat_id);
             break;
 
         case '↩️ بازگشت به منوی کاربری':
@@ -2993,6 +3479,12 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             if ($isAnAdmin && hasPermission($chat_id, 'manage_categories')) {
                 $keyboard = ['keyboard' => [[['text' => '➕ افزودن دسته‌بندی']], [['text' => '📋 لیست دسته‌بندی‌ها']], [['text' => '◀️ بازگشت به منوی اصلی']]], 'resize_keyboard' => true];
                 sendMessage($chat_id, "گزینه مورد نظر را برای مدیریت دسته‌بندی‌ها انتخاب کنید:", $keyboard);
+            }
+            break;
+            
+        case '🤝 مدیریت زیرمجموعه‌گیری':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_referrals')) {
+                showReferralManagementMenu($chat_id);
             }
             break;
 
@@ -3259,25 +3751,17 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             break;
         
         case '💳 مدیریت درگاه پرداخت':
-            if ($isAnAdmin) {
-                $settings = getSettings();
-                $status_icon = ($settings['payment_gateway_status'] ?? 'off') == 'on' ? '✅' : '❌';
-                $merchant_id = $settings['zarinpal_merchant_id'] ?? '<i>تنظیم نشده</i>';
-                
-                $message = "<b>💳 مدیریت درگاه پرداخت زرین‌پال</b>\n\n" .
-                           "▫️ وضعیت کلی: " . ($status_icon == '✅' ? '<b>فعال</b>' : '<b>غیرفعال</b>') . "\n" .
-                           "▫️ مرچنت کد: <code>{$merchant_id}</code>";
-
-                $keyboard = [
-                    'inline_keyboard' => [
-                        [['text' => $status_icon . ' فعال/غیرفعال کردن', 'callback_data' => 'toggle_gateway_status']],
-                        [['text' => '✏️ تنظیم مرچنت کد', 'callback_data' => 'set_zarinpal_merchant_id']],
-                        [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
-                    ]
-                ];
-                sendMessage($chat_id, $message, $keyboard);
-            }
-            break;
+        if ($isAnAdmin && hasPermission($chat_id, 'manage_payment')) {
+            $keyboard = [
+                'inline_keyboard' => [
+                    [['text' => '🔵 مدیریت زرین‌پال', 'callback_data' => 'manage_gateway_zarinpal']],
+                    [['text' => '🟣 مدیریت تترا 98', 'callback_data' => 'manage_gateway_tetra']],
+                    [['text' => '◀️ بازگشت به پنل', 'callback_data' => 'back_to_admin_panel']],
+                ]
+            ];
+            sendMessage($chat_id, "<b>💳 مدیریت درگاه‌های پرداخت</b>\n\nلطفا درگاه مورد نظر برای مدیریت را انتخاب کنید:", $keyboard);
+        }
+        break;
         
         case '📊 آمار کلی':
             if ($isAnAdmin && hasPermission($chat_id, 'view_stats')) {
@@ -3342,10 +3826,16 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             break;
         
         case '🔄 مدیریت تمدید':
-            if ($isAnAdmin) { 
+            if ($isAnAdmin) {
                 showRenewalManagementMenu($chat_id);
             }
-            break;    
+            break;
+            
+        case 'تعیین قیمت دلخواه':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_custom_config')) {
+                showCustomConfigManagementMenu($chat_id);
+            }
+            break;
 
         case '➕ افزودن کد تخفیف':
             if ($isAnAdmin) {
